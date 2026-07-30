@@ -50,9 +50,83 @@ DATA = ROOT / "data"
 MODEL = "claude-opus-5"
 
 # ---------------------------------------------------------------- gate --------
-# Cheap, high-recall, low-precision first pass. Only lines that look like they
-# could carry an intention survive to the extractor. Tuned for recall: a false
-# positive here costs one LLM line, a false negative loses the reminder.
+# Cheap first pass. Only lines that could carry an intention survive to the
+# extractor.
+#
+# The first version of this gate was tuned purely for recall and produced 377
+# candidates of which ~1 was real. The failure modes were not random — they
+# clustered, and each cluster has a structural fix:
+#
+#   1. SELF-CAPTURE. The tool read its own output: assistant prose in the
+#      terminal, its own docs in the note app, its own capture files. A
+#      screen-reading tool that writes to the screen will always feed on
+#      itself unless it is told not to. → SELF_REF + source exclusion.
+#   2. WRONG SOURCE. "I'll take that" in a game stream, a YouTube title, a
+#      calendar row — the sentence looks like a commitment, but the *surface*
+#      makes it impossible. → SOURCE_POLICY: an app's job decides whether a
+#      commitment there is even plausible.
+#   3. NOT THE USER'S. Third-person narration and other people's messages.
+#      → first-person requirement for implied commitments.
+#
+# The lesson generalizes past this project: on screen text, *provenance* is a
+# stronger precision signal than phrasing. Where a sentence appeared tells you
+# more about whether it is a task than how it is worded.
+
+# Apps whose text can plausibly contain a commitment the user made or received.
+# Everything else needs an explicit "remind me" to get through at all.
+CONVERSATIONAL = {
+    "slack", "discord", "messages", "mail", "superhuman", "spark", "outlook",
+    "telegram", "whatsapp", "signal", "linear", "notion", "asana", "jira",
+    "github", "gmail", "teams", "zoom",
+}
+# Apps that are almost never a source of the user's own commitments.
+NEVER_IMPLIED = {
+    "spotify", "music", "vlc", "quicktime", "steam", "obs", "preview",
+    "photos", "activity monitor", "system settings", "finder",
+}
+
+# The tool's own footprint — anything matching is self-capture, never a task.
+SELF_REF = re.compile(
+    r"(contextual[- ]remind|screen capture —|cr-ocr|candidates\.jsonl|"
+    r"feedback\.jsonl|extract\.py|suggestions\.lua|⌃⌥⌘|hammerspoon|"
+    r"\[(?:CARD|inbox|drop)\s*\]|score >= |wispr[- ]takehome)",
+    re.I,
+)
+
+# Structural noise: timestamps, log lines, chat metadata, headings, code.
+STRUCTURAL = re.compile(
+    r"^(?:"
+    r"\d{1,2}:\d{2}\s|"                    # 15:40 game clock / log time
+    r"[•\-*]\s*\d{1,2}\s*(?:am|pm)\b|"     # • 2pm Gym  (calendar row)
+    r"\d{1,2}:\d{2}\s?(?:AM|PM)\s+\w+\s+https?://|"  # chat timestamp + link
+    r"#{1,6}\s|"                           # markdown heading
+    r"\|.*\||"                             # table row
+    r"(?:import|from|def|class|const|let|var|function|return|await)\s|"
+    r"[A-Za-z_.]+\([^)]*\)\s*[;{]?$"       # bare function call
+    r")",
+    re.I,
+)
+
+# First-person markers — an implied commitment must be about the user.
+FIRST_PERSON = re.compile(r"\b(i'?ll|i will|i'?m going to|i need to|i have to|i should|my |me\b)", re.I)
+# Direct address — someone asking the user to do something.
+SECOND_PERSON = re.compile(r"\b(can you|could you|would you|please|you need to|remind me)\b", re.I)
+
+
+def source_policy(source: str) -> str:
+    """How permissive should the gate be for text from this surface?
+
+    full     — conversational app; implied commitments are plausible
+    explicit — only literal "remind me"-style intent gets through
+    none     — never a source of the user's tasks
+    """
+    s = (source or "").lower()
+    app = s.split("—")[0].strip()
+    if any(k in app for k in NEVER_IMPLIED):
+        return "none"
+    if any(k in s for k in CONVERSATIONAL):
+        return "full"
+    return "explicit"
 
 COMMIT = re.compile(
     r"\b("
@@ -76,14 +150,40 @@ NOISE = re.compile(
 )
 
 
-def gate(text: str) -> list[str]:
-    """Return the lines worth spending an extractor call on."""
+EXPLICIT = re.compile(r"\b(remind me|note to self|don'?t forget|todo:|to-?do:)\b", re.I)
+
+
+def gate(text: str, source: str = "") -> list[str]:
+    """Return the lines worth spending an extractor call on.
+
+    Source-aware: the same sentence is a task in Slack and noise in a game
+    stream, so the surface decides how permissive to be.
+    """
+    policy = source_policy(source)
+    if policy == "none":
+        return []
+    if SELF_REF.search(source or ""):
+        return []
+
     keep = []
     for raw in text.splitlines():
         line = raw.strip()
-        if len(line) < 12 or len(line) > 400 or NOISE.match(line):
+        if len(line) < 15 or len(line) > 300:
             continue
-        if COMMIT.search(line) or (TEMPORAL.search(line) and len(line.split()) >= 4):
+        if NOISE.match(line) or STRUCTURAL.match(line) or SELF_REF.search(line):
+            continue
+
+        explicit = EXPLICIT.search(line)
+        if explicit:
+            keep.append(line)  # explicit intent always passes, any surface
+            continue
+        if policy != "full":
+            continue  # non-conversational surface needs explicit intent
+        # Implied commitment: must be phrased as the user's own obligation or
+        # a direct ask of them, AND carry a commitment or temporal marker.
+        if not (FIRST_PERSON.search(line) or SECOND_PERSON.search(line)):
+            continue
+        if COMMIT.search(line) or TEMPORAL.search(line):
             keep.append(line)
     return keep
 
@@ -428,7 +528,7 @@ def run_once(backend: str, verbose: bool = True) -> list[Candidate]:
     fired, gated_total, kept_lines = [], 0, 0
     for entry in entries:
         text = entry.get("text") or ""
-        lines = gate(text)
+        lines = gate(text, entry.get("source", ""))
         gated_total += len(text.splitlines())
         kept_lines += len(lines)
         if not lines:
@@ -499,6 +599,7 @@ def main() -> None:
         help="run the pipeline on literal text (or '-' for stdin) and print the "
         "lane each line would land in. Nothing is written.",
     )
+    ap.add_argument("--source", help="simulate this source for --test, e.g. 'Slack — #team'")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--watch", action="store_true")
     ap.add_argument("--learn", action="store_true")
@@ -516,7 +617,8 @@ def main() -> None:
     if args.test is not None:
         text = sys.stdin.read() if args.test == "-" else args.test
         backend = pick_backend(args.backend)
-        lines = gate(text)
+        test_source = args.source or "test — Slack"
+        lines = gate(text, test_source)
         total = len(text.splitlines())
         print(f"backend: {backend}")
         print(f"gate: {total} lines → {len(lines)} kept")
@@ -525,7 +627,7 @@ def main() -> None:
             return
         weights = load_weights()
         extractor = extract_claude if backend == "claude" else extract_rules
-        cands = extractor(lines, {"source": "test — stdin", "iso": datetime.now().isoformat()})
+        cands = extractor(lines, {"source": test_source, "iso": datetime.now().isoformat()})
         if not cands:
             print("  (extractor found no candidates)")
             return
