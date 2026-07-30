@@ -109,15 +109,18 @@ function M.capture(callback, opts)
         mode = opts.mode or "manual", reason = opts.reason or "hotkey",
         file = readablePath,
       })
-      local ok, line = pcall(hs.json.encode, {
+      local entry = {
         ts = os.time(), iso = os.date("%Y-%m-%dT%H:%M:%S"),
         source = source, ms = ms, text = text, file = readablePath,
         mode = opts.mode or "manual", reason = opts.reason or "hotkey",
-      })
+      }
+      local ok, line = pcall(hs.json.encode, entry)
       if ok then
         local f = io.open(ocrLogPath(), "a")
         if f then f:write(line, "\n"); f:close() end
       end
+      -- live viewer hook (set by cr.init; keeps modules decoupled)
+      if M.onCapture then pcall(M.onCapture, entry) end
       callback(text)
     else
       log.append({ event = "screen.ocr.error", source = source, error = stdErr })

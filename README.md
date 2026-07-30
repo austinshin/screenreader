@@ -47,9 +47,14 @@ tab-away not count as "done"; READY fires only at a transition moment
 │  trigger.lua       per-reminder FSM consuming observer ticks;        │
 │                    fires through the notifier at transition gates    │
 │                                                                      │
-│  screen_text.lua   on-demand window/screen OCR: snapshot → PNG →     │
-│                    bin/cr-ocr (Apple Vision, on-device) → text;      │
-│                    full text to a separate logs/ocr-*.jsonl stream   │
+│  screen_text.lua   window/screen OCR: snapshot → PNG → bin/cr-ocr    │
+│                    (Apple Vision, on-device) → text. Two modes:      │
+│                    manual (⌃⌥⌘S) and persistent watch (⌃⌥⌘W, opt-in, │
+│                    settle-delayed + rate-limited + exclusion list)   │
+│                                                                      │
+│  viewer.lua        live OCR viewer panel (⌃⌥⌘V): shows what was      │
+│                    read, with history paging — the transparency      │
+│                    surface for a screen-reading tool                 │
 │                                                                      │
 │  notify_ui.lua     canvas notification card (guaranteed action       │
 │                    buttons, hover-to-pin, dark/light) + toast        │

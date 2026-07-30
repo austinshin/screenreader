@@ -25,6 +25,7 @@ local matcher  = require("cr.matcher")
 local reminders = require("cr.reminders")
 local trigger  = require("cr.trigger")
 local screenText = require("cr.screen_text")
+local viewer   = require("cr.viewer")
 local menubar  = require("cr.menubar")
 
 log.append({ event = "cr.loaded", projectDir = projectDir })
@@ -34,7 +35,9 @@ observer.start()
 trigger.start()
 menubar.start()
 trigger.onStateChange = menubar.refresh
+screenText.onCapture = viewer.update
 screenText.restoreWatch() -- sticky ⌃⌥⌘W toggle survives reloads/reboots
+viewer.restore()          -- sticky ⌃⌥⌘V viewer panel
 
 -- hotkeys (⌃⌥⌘ layer; alt+space stays with the file opener)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "r", reminders.promptNew)
@@ -42,13 +45,15 @@ hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "t", notifier.test)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "c", menubar.showCurrentContext)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "s", screenText.demo)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "w", screenText.toggleWatch)
+hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "v", viewer.toggle)
 
 -- global handle for console debugging: hs -c "print(hs.inspect(CR.observer.current))"
 M.config, M.log, M.observer, M.ui, M.notifier, M.menubar = config, log, observer, ui, notifier, menubar
 M.matcher, M.reminders, M.trigger, M.screenText = matcher, reminders, trigger, screenText
+M.viewer = viewer
 CR = M
 
 print("[cr] Contextual Reminders loaded — project: " .. tostring(projectDir))
-print("[cr] hotkeys: ⌃⌥⌘R new reminder · ⌃⌥⌘T test · ⌃⌥⌘C context · ⌃⌥⌘S OCR window")
+print("[cr] hotkeys: ⌃⌥⌘R reminder · ⌃⌥⌘S OCR · ⌃⌥⌘W watch · ⌃⌥⌘V viewer · ⌃⌥⌘T test · ⌃⌥⌘C context")
 
 return M

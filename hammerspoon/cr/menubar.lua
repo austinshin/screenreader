@@ -4,6 +4,7 @@ local observer = require("cr.observer")
 local notifier = require("cr.notifier")
 local reminders = require("cr.reminders")
 local screenText = require("cr.screen_text")
+local viewer = require("cr.viewer")
 local ui = require("cr.notify_ui")
 local log = require("cr.log")
 
@@ -79,6 +80,10 @@ local function menu()
         and "Stop screen watching   ⌃⌥⌘W"
         or "Start screen watching (auto-OCR)   ⌃⌥⌘W",
       fn = screenText.toggleWatch,
+    },
+    {
+      title = (viewer.visible and "Hide" or "Show") .. " OCR viewer   ⌃⌥⌘V",
+      fn = viewer.toggle,
     },
   }
   local rows = reminderRows()

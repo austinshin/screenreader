@@ -57,6 +57,8 @@ Three ways, in order of laziness:
 | Test notification (full pipeline) | `⌃⌥⌘T`, or menu bar → *Send test notification* |
 | Show current context as a card | `⌃⌥⌘C`, or menu bar → *Show current context* |
 | **OCR the focused window** | `⌃⌥⌘S` — card shows char count + preview; full text → `logs/ocr-*.jsonl` |
+| **Toggle persistent screen watching** | `⌃⌥⌘W` — auto-OCR on context change (sticky) |
+| **Toggle the live OCR viewer** | `⌃⌥⌘V` — on-screen panel showing what OCR just read (sticky) |
 | Manage reminders | menu bar → each reminder row has *Mark done* / *Cancel* |
 | Pause / resume the observer | menu bar → *Pause observer* / *Resume observer* |
 | Open the logs folder | menu bar → *Open logs folder* |
@@ -210,6 +212,21 @@ Every capture (either mode) produces **two outputs**:
 
 The filename answers "when, how, and from what" at a glance:
 `2026-07-29_22-19-09_auto_Obsidian.md` vs `2026-07-29_20-57-46_manual_kitty.md`.
+
+### Live viewer (`⌃⌥⌘V`)
+
+An always-on-screen panel (top-left) showing **what the OCR actually read** —
+source, mode, timestamp, char count, duration, and the full text. Every capture
+(manual or auto) pushes into it live.
+
+- `‹` / `›` page back through the last 25 captures; `✕` closes
+- sticky, like watch mode: survives reloads and reboots
+- also toggleable from the menu bar → *Show/Hide OCR viewer*
+- it's a Hammerspoon canvas overlay, not a window, so per-window captures never
+  photograph the viewer itself (whole-screen captures do)
+
+This is the transparency surface: for a tool that reads your screen, "what does
+it see?" should never require opening a log file.
 - Expect ~4–5s per busy retina window (Vision "accurate" mode; a "fast" mode
   or downscaling is an easy tune if it ever gates a real trigger).
 
