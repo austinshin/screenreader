@@ -49,6 +49,7 @@ hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "c", menubar.showCurrentContext)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "s", screenText.demo)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "w", screenText.toggleWatch)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "v", viewer.toggle)
+hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "i", suggestions.review)
 
 -- global handle for console debugging: hs -c "print(hs.inspect(CR.observer.current))"
 M.config, M.log, M.observer, M.ui, M.notifier, M.menubar = config, log, observer, ui, notifier, menubar

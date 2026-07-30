@@ -493,6 +493,12 @@ def stats() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--test",
+        metavar="TEXT",
+        help="run the pipeline on literal text (or '-' for stdin) and print the "
+        "lane each line would land in. Nothing is written.",
+    )
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--watch", action="store_true")
     ap.add_argument("--learn", action="store_true")
@@ -506,6 +512,32 @@ def main() -> None:
         return
     if args.stats:
         stats()
+        return
+    if args.test is not None:
+        text = sys.stdin.read() if args.test == "-" else args.test
+        backend = pick_backend(args.backend)
+        lines = gate(text)
+        total = len(text.splitlines())
+        print(f"backend: {backend}")
+        print(f"gate: {total} lines → {len(lines)} kept")
+        if not lines:
+            print("  (nothing survived the gate — no extractor call would be made)")
+            return
+        weights = load_weights()
+        extractor = extract_claude if backend == "claude" else extract_rules
+        cands = extractor(lines, {"source": "test — stdin", "iso": datetime.now().isoformat()})
+        if not cands:
+            print("  (extractor found no candidates)")
+            return
+        for c in cands:
+            c.features = featurize(c)
+            c.score = score(c, weights)
+            lane = (
+                "CARD " if c.score >= THRESH_FIRE
+                else "inbox" if c.score >= THRESH_INBOX
+                else "drop "
+            )
+            print(f"  [{lane}] {c.score:.2f} {c.kind:<11} {c.action[:66]}")
         return
 
     backend = pick_backend(args.backend)

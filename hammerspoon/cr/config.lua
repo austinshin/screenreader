@@ -33,6 +33,8 @@ local M = {
     pollInterval   = 10,   -- seconds between checks of data/candidates.jsonl
     fireThreshold  = 0.55, -- >= interrupt with a card
     inboxThreshold = 0.30, -- >= silent menu-bar inbox (enforced service-side)
+    digestMin      = 3,    -- inbox items needed before a digest is worth asking
+    digestCooldown = 3600, -- seconds between digests (at most one per hour)
   },
 
   -- trigger state machine
