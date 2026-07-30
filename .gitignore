@@ -1,0 +1,6 @@
+logs/
+data/
+tmp/
+bin/
+hammerspoon/cr/secrets.lua
+.DS_Store
