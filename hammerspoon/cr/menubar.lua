@@ -5,6 +5,7 @@ local notifier = require("cr.notifier")
 local reminders = require("cr.reminders")
 local screenText = require("cr.screen_text")
 local viewer = require("cr.viewer")
+local suggestions = require("cr.suggestions")
 local ui = require("cr.notify_ui")
 local log = require("cr.log")
 
@@ -90,6 +91,12 @@ local function menu()
   if #rows > 0 then
     items[#items + 1] = { title = "-" }
     for _, row in ipairs(rows) do items[#items + 1] = row end
+  end
+  local sugg = suggestions.inboxRows()
+  if #sugg > 0 then
+    items[#items + 1] = { title = "-" }
+    items[#items + 1] = { title = "Suggestions (" .. #sugg .. ")", disabled = true }
+    for _, row in ipairs(sugg) do items[#items + 1] = row end
   end
   items[#items + 1] = { title = "-" }
   items[#items + 1] = {

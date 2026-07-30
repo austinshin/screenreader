@@ -15,13 +15,24 @@ local M = {
   -- persistent screen-watch mode (auto-OCR on context change; OFF by default,
   -- toggled via menu bar or ⌃⌥⌘W — this is the privacy firehose, opt-in only)
   watch = {
-    settleSeconds = 3,   -- context must be stable this long before capturing
-    minInterval   = 15,  -- seconds between auto-captures (rate limit)
+    settleSeconds   = 3,   -- context must be stable this long before capturing
+    minInterval     = 10,  -- floor between auto-captures (rate limit)
+    intervalSeconds = 20,  -- re-capture the same window this often (scrolling,
+                           -- terminal output, and reading don't change any
+                           -- metadata, so change-detection alone goes stale)
+    idleSkip        = 120, -- skip interval captures after this much idle time
     excludeBundles = {   -- never auto-capture these
       ["com.1password.1password"] = true,
       ["com.apple.keychainaccess"] = true,
       ["com.apple.systempreferences"] = true,
     },
+  },
+
+  -- suggestion lanes (candidates from service/extract.py)
+  suggestions = {
+    pollInterval   = 10,   -- seconds between checks of data/candidates.jsonl
+    fireThreshold  = 0.55, -- >= interrupt with a card
+    inboxThreshold = 0.30, -- >= silent menu-bar inbox (enforced service-side)
   },
 
   -- trigger state machine

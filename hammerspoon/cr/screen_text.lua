@@ -101,6 +101,27 @@ function M.capture(callback, opts)
     local ms = math.floor((hs.timer.secondsSinceEpoch() - started) * 1000)
     if exitCode == 0 then
       local text = stdOut or ""
+
+      -- Unchanged-content dedup: interval re-captures of a window the user is
+      -- reading produce byte-identical text. Refresh the viewer's timestamp,
+      -- log a compact event, but don't write another pair of files.
+      if text == M._lastText and source == M._lastSource then
+        log.append({
+          event = "screen.ocr.unchanged", source = source, chars = #text,
+          ms = ms, mode = opts.mode or "manual", reason = opts.reason or "hotkey",
+        })
+        if M.onCapture then
+          pcall(M.onCapture, {
+            iso = os.date("%Y-%m-%dT%H:%M:%S"), source = source, ms = ms,
+            text = text, mode = opts.mode or "manual",
+            reason = opts.reason or "hotkey", unchanged = true,
+          })
+        end
+        callback(text)
+        return
+      end
+      M._lastText, M._lastSource = text, source
+
       -- two outputs per capture: (a) machine-readable JSONL stream,
       -- (b) one human-readable markdown file named by timestamp+mode+app
       local readablePath = writeReadable(source, ms, text, opts.mode, opts.reason)
@@ -139,7 +160,7 @@ end
 
 M.watching = false
 local watchSubscribed = false
-local settleTimer, lastCapturedKey, lastCaptureAt
+local settleTimer, lastCapturedKey, lastCaptureAt, intervalTimer
 
 local function watchKey(snap)
   return (snap.bundle or "") .. "|" .. (snap.title or "") .. "|" .. (snap.url or "")
@@ -163,6 +184,21 @@ local function onContextChange(snap)
   end)
 end
 
+-- Periodic re-capture: scrolling, reading, and terminal output change no
+-- metadata at all, so change-detection alone would leave the stream stale.
+-- Content dedup (above) keeps identical re-captures from writing files.
+local function onInterval()
+  if not M.watching then return end
+  local w = config.watch
+  local cur = require("cr.observer").current
+  if not cur then return end
+  if cur.bundle and w.excludeBundles[cur.bundle] then return end
+  if (cur.idle or 0) >= w.idleSkip then return end -- user is away; don't churn
+  if lastCaptureAt and (os.time() - lastCaptureAt) < w.minInterval then return end
+  lastCaptureAt = os.time()
+  M.capture(function() end, { mode = "auto", reason = "interval" })
+end
+
 function M.startWatch()
   if M.watching then return end
   M.watching = true
@@ -171,8 +207,11 @@ function M.startWatch()
     require("cr.observer").subscribe(onContextChange)
     watchSubscribed = true
   end
+  if intervalTimer then intervalTimer:stop() end
+  intervalTimer = hs.timer.doEvery(config.watch.intervalSeconds, onInterval)
   log.append({ event = "watch.start" })
-  ui.toast("📸 Screen watching ON — auto-OCR on context change", 1.8)
+  ui.toast("📸 Screen watching ON — auto-OCR on change + every "
+    .. config.watch.intervalSeconds .. "s", 1.8)
 end
 
 function M.stopWatch()
@@ -180,6 +219,7 @@ function M.stopWatch()
   M.watching = false
   hs.settings.set("cr.watch", false)
   if settleTimer then settleTimer:stop(); settleTimer = nil end
+  if intervalTimer then intervalTimer:stop(); intervalTimer = nil end
   log.append({ event = "watch.stop" })
   ui.toast("📸 Screen watching OFF", 1.5)
 end

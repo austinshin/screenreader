@@ -26,6 +26,7 @@ local reminders = require("cr.reminders")
 local trigger  = require("cr.trigger")
 local screenText = require("cr.screen_text")
 local viewer   = require("cr.viewer")
+local suggestions = require("cr.suggestions")
 local menubar  = require("cr.menubar")
 
 log.append({ event = "cr.loaded", projectDir = projectDir })
@@ -38,6 +39,8 @@ trigger.onStateChange = menubar.refresh
 screenText.onCapture = viewer.update
 screenText.restoreWatch() -- sticky ⌃⌥⌘W toggle survives reloads/reboots
 viewer.restore()          -- sticky ⌃⌥⌘V viewer panel
+suggestions.start()
+suggestions.onChange = menubar.refresh
 
 -- hotkeys (⌃⌥⌘ layer; alt+space stays with the file opener)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "r", reminders.promptNew)
@@ -50,7 +53,7 @@ hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "v", viewer.toggle)
 -- global handle for console debugging: hs -c "print(hs.inspect(CR.observer.current))"
 M.config, M.log, M.observer, M.ui, M.notifier, M.menubar = config, log, observer, ui, notifier, menubar
 M.matcher, M.reminders, M.trigger, M.screenText = matcher, reminders, trigger, screenText
-M.viewer = viewer
+M.viewer, M.suggestions = viewer, suggestions
 CR = M
 
 print("[cr] Contextual Reminders loaded — project: " .. tostring(projectDir))

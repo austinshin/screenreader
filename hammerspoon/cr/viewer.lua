@@ -66,8 +66,10 @@ local function render()
   }
 
   local meta = e
-    and string.format("%s   %d chars   %dms   [%d/%d]",
-      e.iso or "", #(e.text or ""), e.ms or 0, cursor, #history)
+    and string.format("%s   %d chars   %dms%s   [%d/%d]",
+      e.iso or "", #(e.text or ""), e.ms or 0,
+      e.repeats and string.format("   ×%d unchanged", e.repeats) or "",
+      cursor, #history)
     or "toggle with ⌃⌥⌘V  ·  captures land in logs/captures/"
   canvas[#canvas + 1] = {
     type = "text", text = meta, textSize = 10.5, textColor = pal.meta,
@@ -129,6 +131,15 @@ end
 
 -- called by cr.screen_text after every successful capture
 function M.update(entry)
+  -- unchanged re-capture: refresh the top entry's timestamp instead of
+  -- filling history with identical copies
+  if entry.unchanged and history[1] then
+    history[1].iso = entry.iso
+    history[1].ms = entry.ms
+    history[1].repeats = (history[1].repeats or 1) + 1
+    if M.visible and cursor == 1 then render() end
+    return
+  end
   table.insert(history, 1, entry)
   while #history > MAX_HISTORY do table.remove(history) end
   cursor = 1
