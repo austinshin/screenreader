@@ -80,17 +80,24 @@ local function dismiss(c, value)
   if M.onChange then pcall(M.onChange) end
 end
 
+-- The ask, phrased as an offer rather than an assertion. The system is
+-- guessing; the copy should say so, quote the evidence it guessed from, and
+-- make declining as easy as accepting. A suggestion that reads as a decision
+-- ("Reminder created") spends trust it hasn't earned.
 function M.showCard(c)
+  local where = (c.app and c.app ~= "" and c.app ~= "?") and (" in " .. c.app) or ""
+  local quote = c.evidence or c.action
+  if #quote > 120 then quote = quote:sub(1, 117) .. "…" end
   ui.show({
-    title = "Suggested reminder  ·  " .. string.format("%.2f", c.score or 0),
-    body = c.action .. "\n\n" .. (c.source or ""),
+    title = "I noticed something" .. where,
+    body = string.format('"%s"\n\nWant a reminder to: %s?', quote, c.action),
     icon = "💡",
     urgency = "warn",
     duration = 20,
     actions = {
-      { label = "Add",      fn = function() accept(c) end },
+      { label = "Yes",      fn = function() accept(c) end },
       { label = "Not mine", fn = function() dismiss(c, "not_mine") end },
-      { label = "Dismiss",  fn = function() dismiss(c, "dismiss") end },
+      { label = "No",       fn = function() dismiss(c, "dismiss") end },
     },
   })
 end
