@@ -33,11 +33,13 @@ local function capturesDir()
   return (config.projectDir or os.getenv("HOME")) .. "/logs/captures"
 end
 
--- one human-readable markdown file per capture, filename = timestamp + app
-local function writeReadable(source, ms, text)
+-- one human-readable markdown file per capture; filename answers "when, how,
+-- and from what": <timestamp>_<mode>_<App>.md (mode: manual | auto)
+local function writeReadable(source, ms, text, mode, reason)
   hs.fs.mkdir(capturesDir())
   local slug = (source:match("^[^—]+") or "capture"):gsub("%s+$", ""):gsub("[^%w%-]+", "-")
-  local base = string.format("%s/%s_%s", capturesDir(), os.date("%Y-%m-%d_%H-%M-%S"), slug)
+  local base = string.format("%s/%s_%s_%s",
+    capturesDir(), os.date("%Y-%m-%d_%H-%M-%S"), mode or "manual", slug)
   local path = base .. ".md"
   local n = 1
   while hs.fs.attributes(path) do
@@ -47,8 +49,8 @@ local function writeReadable(source, ms, text)
   local f = io.open(path, "w")
   if not f then return nil end
   f:write(string.format(
-    "# Screen capture — %s\n\n- source: %s\n- duration: %dms\n- chars: %d\n\n---\n\n%s\n",
-    os.date("%Y-%m-%d %H:%M:%S"), source, ms, #text, text))
+    "# Screen capture — %s\n\n- source: %s\n- mode: %s (%s)\n- duration: %dms\n- chars: %d\n\n---\n\n%s\n",
+    os.date("%Y-%m-%d %H:%M:%S"), source, mode or "manual", reason or "hotkey", ms, #text, text))
   f:close()
   return path
 end
@@ -100,15 +102,17 @@ function M.capture(callback, opts)
     if exitCode == 0 then
       local text = stdOut or ""
       -- two outputs per capture: (a) machine-readable JSONL stream,
-      -- (b) one human-readable markdown file named by timestamp
-      local readablePath = writeReadable(source, ms, text)
+      -- (b) one human-readable markdown file named by timestamp+mode+app
+      local readablePath = writeReadable(source, ms, text, opts.mode, opts.reason)
       log.append({
         event = "screen.ocr", source = source, chars = #text, ms = ms,
+        mode = opts.mode or "manual", reason = opts.reason or "hotkey",
         file = readablePath,
       })
       local ok, line = pcall(hs.json.encode, {
         ts = os.time(), iso = os.date("%Y-%m-%dT%H:%M:%S"),
         source = source, ms = ms, text = text, file = readablePath,
+        mode = opts.mode or "manual", reason = opts.reason or "hotkey",
       })
       if ok then
         local f = io.open(ocrLogPath(), "a")
@@ -121,6 +125,62 @@ function M.capture(callback, opts)
     end
   end, { shot })
   M._task:start()
+end
+
+-- persistent watch mode ---------------------------------------------------
+-- Auto-OCR whenever the screen context changes (mode 1: "always watching").
+-- OFF by default — this is the privacy firehose, so it's strictly opt-in.
+-- Guards: a settle delay (no capture until the new context has been stable
+-- for N seconds — an app-switching spree yields one capture, not five), a
+-- rate limit between captures, and an exclusion list (password managers etc.).
+
+M.watching = false
+local watchSubscribed = false
+local settleTimer, lastCapturedKey, lastCaptureAt
+
+local function watchKey(snap)
+  return (snap.bundle or "") .. "|" .. (snap.title or "") .. "|" .. (snap.url or "")
+end
+
+local function onContextChange(snap)
+  if not M.watching or not snap then return end
+  local w = config.watch
+  if snap.bundle and w.excludeBundles[snap.bundle] then return end
+  if settleTimer then settleTimer:stop() end
+  local key = watchKey(snap)
+  settleTimer = hs.timer.doAfter(w.settleSeconds, function()
+    local cur = require("cr.observer").current
+    if not M.watching or not cur then return end
+    if watchKey(cur) ~= key then return end -- already moved on; skip
+    if key == lastCapturedKey then return end -- this context already captured
+    if lastCaptureAt and (os.time() - lastCaptureAt) < w.minInterval then return end
+    lastCapturedKey = key
+    lastCaptureAt = os.time()
+    M.capture(function() end, { mode = "auto", reason = "context-change" })
+  end)
+end
+
+function M.startWatch()
+  if M.watching then return end
+  M.watching = true
+  if not watchSubscribed then
+    require("cr.observer").subscribe(onContextChange)
+    watchSubscribed = true
+  end
+  log.append({ event = "watch.start" })
+  ui.toast("📸 Screen watching ON — auto-OCR on context change", 1.8)
+end
+
+function M.stopWatch()
+  if not M.watching then return end
+  M.watching = false
+  if settleTimer then settleTimer:stop(); settleTimer = nil end
+  log.append({ event = "watch.stop" })
+  ui.toast("📸 Screen watching OFF", 1.5)
+end
+
+function M.toggleWatch()
+  if M.watching then M.stopWatch() else M.startWatch() end
 end
 
 -- hotkey demo: OCR the focused window, show a preview card

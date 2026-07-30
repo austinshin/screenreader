@@ -179,12 +179,30 @@ Privacy design, deliberately:
   source, char count, duration); the full text goes to `logs/ocr-*.jsonl`,
   which is local and gitignored. Clear it anytime: `rm logs/ocr-*.jsonl`.
 
-Every capture produces **two outputs**:
+### Two capture modes
+
+| mode | how | behavior |
+|---|---|---|
+| **manual** | `⌃⌥⌘S` | captures the focused window, once, when you ask |
+| **auto** ("screen watching") | `⌃⌥⌘W` toggle, or menu bar → *Start screen watching* | OCRs every context change — **off by default**, opt-in |
+
+Auto mode guards (all in `config.watch`):
+- **settle delay** (3s) — the new context must hold still before capturing; an
+  app-switching spree yields one capture, not five
+- **rate limit** (15s min between captures)
+- **exclusion list** — password managers, Keychain, System Settings are never
+  auto-captured; add bundles to `config.watch.excludeBundles`
+- menu bar status shows `📸 auto-OCR` while watching
+
+Every capture (either mode) produces **two outputs**:
 
 | format | path | for |
 |---|---|---|
-| JSONL (machine) | `logs/ocr-YYYY-MM-DD.jsonl` — one line per capture, `file` field links to the readable twin | replay harness, jq, future trigger evidence |
-| Markdown (human) | `logs/captures/YYYY-MM-DD_HH-MM-SS_<App>.md` — header (source/duration/chars) + full text | reading, grepping, dragging into Obsidian |
+| JSONL (machine) | `logs/ocr-YYYY-MM-DD.jsonl` — one line per capture with `mode` + `reason`; `file` field links to the readable twin | replay harness, jq, future trigger evidence |
+| Markdown (human) | `logs/captures/YYYY-MM-DD_HH-MM-SS_<mode>_<App>.md` — header (source/mode/duration/chars) + full text | reading, grepping, dragging into Obsidian |
+
+The filename answers "when, how, and from what" at a glance:
+`2026-07-29_22-19-09_auto_Obsidian.md` vs `2026-07-29_20-57-46_manual_kitty.md`.
 - Expect ~4–5s per busy retina window (Vision "accurate" mode; a "fast" mode
   or downscaling is an easy tune if it ever gates a real trigger).
 

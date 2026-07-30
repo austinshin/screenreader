@@ -3,6 +3,7 @@
 local observer = require("cr.observer")
 local notifier = require("cr.notifier")
 local reminders = require("cr.reminders")
+local screenText = require("cr.screen_text")
 local ui = require("cr.notify_ui")
 local log = require("cr.log")
 
@@ -66,11 +67,19 @@ local function menu()
   local ctxLine = cur
     and string.format("%s — %s", cur.app or "?", truncate(cur.title or cur.url or "", 40))
     or "no context yet"
+  local status = (observer.running and "👁 observing" or "⏸ paused")
+    .. (screenText.watching and " · 📸 auto-OCR" or "")
   local items = {
     { title = "Contextual Reminders", disabled = true },
-    { title = (observer.running and "👁 observing" or "⏸ paused") .. "  ·  " .. ctxLine, disabled = true },
+    { title = status .. "  ·  " .. ctxLine, disabled = true },
     { title = "-" },
     { title = "New reminder…   ⌃⌥⌘R", fn = reminders.promptNew },
+    {
+      title = screenText.watching
+        and "Stop screen watching   ⌃⌥⌘W"
+        or "Start screen watching (auto-OCR)   ⌃⌥⌘W",
+      fn = screenText.toggleWatch,
+    },
   }
   local rows = reminderRows()
   if #rows > 0 then

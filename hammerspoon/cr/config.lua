@@ -12,6 +12,18 @@ local M = {
   remoteWhenAway = true, -- mirror notifications to remote channels when away
   remoteChannels = { "discord" },
 
+  -- persistent screen-watch mode (auto-OCR on context change; OFF by default,
+  -- toggled via menu bar or ⌃⌥⌘W — this is the privacy firehose, opt-in only)
+  watch = {
+    settleSeconds = 3,   -- context must be stable this long before capturing
+    minInterval   = 15,  -- seconds between auto-captures (rate limit)
+    excludeBundles = {   -- never auto-capture these
+      ["com.1password.1password"] = true,
+      ["com.apple.keychainaccess"] = true,
+      ["com.apple.systempreferences"] = true,
+    },
+  },
+
   -- trigger state machine
   trigger = {
     absentSamples = 6,   -- consecutive absent samples before "really gone" (~30s at 5s poll)
