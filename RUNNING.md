@@ -16,6 +16,27 @@ Everything operational: starting, verifying, using, configuring, debugging.
 
 > `nowplaying-cli` is also auto-detected but is broken on macOS 15.4+; prefer `media-control`. Without either, everything still works — snapshots just have `media = nil`.
 
+## Is it working? (one command)
+
+```sh
+./smoke-test.sh
+```
+
+Checks all seven layers in ~20s without waiting on wall-clock: module loaded,
+observer sensing, OCR + permission, the trigger FSM (synthetic ticks), card
+delivery, the extraction service, and log files. Prints `N passed, M failed` and
+exits nonzero on failure, so it works as a pre-demo check or in CI.
+
+## Daily use in 30 seconds
+
+1. **Set a reminder:** look at the thing → `⌃⌥⌘R` → type what to remember → Enter.
+2. **Walk away from it.** ~30s of real absence plus your next app switch → card fires.
+3. **Answer the card:** Done / Snooze / **Too early** (the last one is the signal
+   that trains the system — use it).
+4. **Optional, opt-in:** `⌃⌥⌘W` turns on persistent screen-watching; `⌃⌥⌘V`
+   shows what the OCR is reading; `.venv/bin/python service/extract.py --watch`
+   turns captured text into suggested reminders.
+
 ## Starting it
 
 The module loads automatically when Hammerspoon starts, via the loader stanza at the bottom of `~/.hammerspoon/init.lua` (it `pcall`s the require, so an error here can never break the rest of the config).
