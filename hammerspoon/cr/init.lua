@@ -34,6 +34,7 @@ observer.start()
 trigger.start()
 menubar.start()
 trigger.onStateChange = menubar.refresh
+screenText.restoreWatch() -- sticky ⌃⌥⌘W toggle survives reloads/reboots
 
 -- hotkeys (⌃⌥⌘ layer; alt+space stays with the file opener)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "r", reminders.promptNew)

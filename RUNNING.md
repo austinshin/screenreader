@@ -186,6 +186,13 @@ Privacy design, deliberately:
 | **manual** | `⌃⌥⌘S` | captures the focused window, once, when you ask |
 | **auto** ("screen watching") | `⌃⌥⌘W` toggle, or menu bar → *Start screen watching* | OCRs every context change — **off by default**, opt-in |
 
+**Auto mode is sticky.** The toggle is stored via `hs.settings` (persisted to
+Hammerspoon's plist), so once you turn it on it stays on across `hs.reload()`,
+app restarts, and reboots — until you turn it off. Since Hammerspoon is a login
+item, that means truly always-on. Verify: `defaults read
+org.hammerspoon.Hammerspoon | grep cr.watch` (`1` = on) or
+`hs -c "return tostring(CR.screenText.watching)"`.
+
 Auto mode guards (all in `config.watch`):
 - **settle delay** (3s) — the new context must hold still before capturing; an
   app-switching spree yields one capture, not five

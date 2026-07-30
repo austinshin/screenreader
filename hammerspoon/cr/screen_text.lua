@@ -163,6 +163,7 @@ end
 function M.startWatch()
   if M.watching then return end
   M.watching = true
+  hs.settings.set("cr.watch", true) -- sticky: survives hs.reload() and reboots
   if not watchSubscribed then
     require("cr.observer").subscribe(onContextChange)
     watchSubscribed = true
@@ -174,9 +175,15 @@ end
 function M.stopWatch()
   if not M.watching then return end
   M.watching = false
+  hs.settings.set("cr.watch", false)
   if settleTimer then settleTimer:stop(); settleTimer = nil end
   log.append({ event = "watch.stop" })
   ui.toast("📸 Screen watching OFF", 1.5)
+end
+
+-- restore the sticky toggle (called from cr.init after everything is loaded)
+function M.restoreWatch()
+  if hs.settings.get("cr.watch") then M.startWatch() end
 end
 
 function M.toggleWatch()
