@@ -11,6 +11,7 @@ local matcher = require("cr.matcher")
 local observer = require("cr.observer")
 local timeparse = require("cr.timeparse")
 local condition = require("cr.condition")
+local tier = require("cr.tier")
 local ui = require("cr.notify_ui")
 
 local M = { items = {} }
@@ -66,10 +67,19 @@ function M.add(text, snap, opts)
       return nil
     end
   end
+  -- Screen-bound reminders open at "in context"; the words can override that
+  -- in either direction. See cr.tier — this is an opening position, not a
+  -- verdict; the tier moves as consequence gets nearer or context arrives.
+  local isBound = ref.kind ~= "time"
+  local tr, trWhy = tier.classify(text, isBound)
+
   local r = {
     id = string.format("r%d%03d", os.time(), math.random(999)),
     text = text,
     createdAt = os.time(),
+    tier = tr,
+    tierInitial = tr,
+    tierWhy = trWhy,
     referent = ref,
     dueAt = dueAt,            -- epoch; nil for purely contextual reminders
     whenPhrase = phrase,      -- the words the time came from, verbatim
@@ -104,6 +114,8 @@ function M.add(text, snap, opts)
       and { "place", "not used — a timed reminder fires wherever you are" }
       or  { "place", "bound to " .. (ref.label or "?")
               .. " · fires once you're done with it" },
+    { "attention", string.format("%s — %s (%s)",
+        tier.LABEL[r.tier].name, tier.LABEL[r.tier].note, r.tierWhy) },
     { "delivery", table.concat(r.channels or { "card" }, " + ") },
   })
   return r

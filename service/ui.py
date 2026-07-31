@@ -347,6 +347,13 @@ nav.tabs button.sel .n{border-color:var(--accent);color:var(--accent)}
 .grp{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);
   margin:20px 0 8px;font-weight:600}
 .grp:first-child{margin-top:4px}
+.grpNote{text-transform:none;letter-spacing:0;font-weight:400;opacity:.65}
+.prov{color:var(--dim);font-size:12px;line-height:1.5;margin-top:2px}
+.prov .dim,.dim{opacity:.6}
+.rem.t1{border-color:rgba(247,118,142,.5)}
+.rem.t1 .rail{background:linear-gradient(180deg,transparent,rgba(247,118,142,.10))}
+.rem.t1 .rail b{color:var(--bad)}
+.rem.t4{opacity:.72}
 
 /* teaching surface */
 .teach{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
@@ -427,6 +434,15 @@ function $(id){
 }
 
 let state = null; // latest /api/state payload, for channel toggling
+
+// Words, never numbers — "tier 2" is an internal model, not something to
+// put in front of a person.
+const TIERS = {
+  1: {name:'Critical',   note:'interrupts you as soon as it fires'},
+  2: {name:'Upcoming',   note:'waits for a natural break'},
+  3: {name:'In context', note:'waits until you’re done with the thing'},
+  4: {name:'Ambient',    note:'never interrupts — lives here and in the menu bar'},
+};
 
 // ------------------------------------------------------------- tabs ---------
 // Four jobs, one at a time. Everything used to stack into a single scroll, so
@@ -512,31 +528,65 @@ function renderReminders(list){
   const el = $('rem');
   if(!list.length){
     el.innerHTML = `<div class="card empty">
-      Nothing scheduled.<br>Say “hey wispr, remind me to …” or press ⌃⌥⌘N.</div>`;
+      Nothing yet.<br>Say “hey wispr, remind me to …” or press control+option+command+N.</div>`;
     return;
   }
-  const timed = list.filter(r=>r.dueAt).sort((a,b)=>a.dueAt-b.dueAt);
-  const ctx   = list.filter(r=>!r.dueAt);
+
+  // Provenance before state. The first question about a reminder you didn't
+  // expect is always "when did I ask for this?" — so that line comes first,
+  // then why it's timed/bound, then what happens next in a full sentence.
+  const lines = r => {
+    const out = [];
+    const made = r.createdAt
+      ? new Date(r.createdAt*1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})
+      : null;
+    if(made) out.push(`you said this at ${made}${r.via ? ', by ' + esc(r.via) : ''}`);
+    if(r.whenPhrase) out.push(`you said “${esc(r.whenPhrase)}” → ${esc(fmtDue(r.dueAt))}`);
+    if(r.condPhrase) out.push(`you said “${esc(r.condPhrase)}”`);
+    const place = r.referent && r.referent.label;
+    if(place && place !== 'anywhere'){
+      // A binding is only a trigger for contextual reminders. On a timed one
+      // the window is just where you were standing — labelling both with the
+      // same pin taught you to distrust the pin.
+      out.push(r.dueAt
+        ? `set while you were in ${esc(place)} <span class="dim">(not a trigger)</span>`
+        : `while you were in ${esc(place)}`);
+    }
+    if(!r.dueAt){
+      out.push(r.state === 'pending'
+        ? 'surfaces once that comes back on screen, then goes away again'
+        : 'surfaces when you’re done with it');
+    }
+    return out;
+  };
+
   const row = r => {
     const rail = railFor(r);
-    const where = r.referent && r.referent.label && r.referent.label !== 'anywhere'
-      ? r.referent.label : '';
-    return `<div class="rem ${rail.cls}">
+    const t = r.tier || 2;
+    return `<div class="rem ${rail.cls} t${t}">
       <div class="rail ${rail.cls==='ctx'?'ctx':''}">
         <b>${esc(rail.top)}</b><span>${esc(rail.sub)}</span>
       </div>
       <div class="body">
         <div class="t">${esc(r.text)}</div>
-        <div class="s">${where?'📍 '+esc(where):''}</div>
+        ${lines(r).map(l=>`<div class="prov">↳ ${l}</div>`).join('')}
+        ${r.tierWhy?`<div class="prov dim">↳ ${esc(TIERS[t].note)} — ${esc(r.tierWhy)}</div>`:''}
         <div class="chips">${chipRow(r)}</div>
       </div>
     </div>`;
   };
-  // screen-bound first: that's the trigger this project is about, and a
-  // clock reminder is the ordinary case you already have five apps for
-  el.innerHTML =
-    (ctx.length ? `<div class="grp">Watching your screen</div>` + ctx.map(row).join('') : '') +
-    (timed.length ? `<div class="grp">Scheduled by time</div>` + timed.map(row).join('') : '');
+
+  // Sorted by what it costs to miss, not by clock: the thing that can hurt
+  // you is always at the top.
+  let html = '';
+  for(const t of [1,2,3,4]){
+    const group = list.filter(r => (r.tier||2) === t);
+    if(!group.length) continue;
+    group.sort((a,b)=> (a.dueAt||Infinity) - (b.dueAt||Infinity));
+    html += `<div class="grp">${TIERS[t].name}<span class="grpNote"> · ${TIERS[t].note}</span></div>`
+         +  group.map(row).join('');
+  }
+  el.innerHTML = html;
 }
 
 // one plain-language line per reminder — no state-machine jargon
