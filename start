@@ -70,6 +70,10 @@ case "${1:-up}" in
     stop_one dashboard "$UI_PID"
     stop_one extractor "$EX_PID"
     ;;
+  restart)
+    "$0" stop
+    exec "$0" up
+    ;;
   status)
     alive "$UI_PID" && echo "  dashboard:   up (pid $(cat "$UI_PID")) → http://localhost:$PORT" \
                     || echo "  dashboard:   down"
@@ -94,7 +98,7 @@ case "${1:-up}" in
     echo "  hotkey    → fn⇧⌘N (works with time too: \"… in 5 minutes\", \"… at 3pm\")"
     ;;
   *)
-    echo "usage: ./start [status|stop]"
+    echo "usage: ./start [status|stop|restart]"
     exit 1
     ;;
 esac
