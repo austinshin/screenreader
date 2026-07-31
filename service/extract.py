@@ -93,6 +93,11 @@ SELF_REF = re.compile(
     re.I,
 )
 
+# The suggestion inbox rendered on screen: "💡 0.45 Sam Xu: …" (the bulb OCRs
+# as P/D/o). A line opening with a bare two-decimal score is this app's own UI
+# being read back — the purest form of self-capture.
+SELF_UI_ROW = re.compile(r"^\s*\S{0,2}\s*[01]\.\d{2}\s+\S")
+
 # Structural noise: timestamps, log lines, chat metadata, headings, code.
 STRUCTURAL = re.compile(
     r"^(?:"
@@ -111,6 +116,78 @@ STRUCTURAL = re.compile(
 FIRST_PERSON = re.compile(r"\b(i'?ll|i will|i'?m going to|i need to|i have to|i should|my |me\b)", re.I)
 # Direct address — someone asking the user to do something.
 SECOND_PERSON = re.compile(r"\b(can you|could you|would you|please|you need to|remind me)\b", re.I)
+
+# ------------------------------------------------------- chat chrome ---------
+# In a chat client every line carries a timestamp and a speaker. Both are
+# chrome, not content — and the timestamp is actively harmful as a signal:
+# because it appears on EVERY line it can't discriminate, yet the first version
+# of this gate treated a bare clock time as evidence of a commitment. Result:
+# "[10:47 AM] Link: so if like u were to tell me" survived on the strength of
+# "10:47", while "[10:47 AM] Saujas: hey make sure to create a pull request"
+# was dropped because "make sure" wasn't a known phrasing.
+#
+# Stripping chrome first fixes both, and buys a signal worth more than anything
+# it removed: WHO SAID IT. The whole question a reminder gate has to answer is
+# whose obligation this is, and the speaker answers it — the same words mean
+# different things from different mouths:
+#   "Saujas: make sure to open a PR"  → someone assigning the user work   KEEP
+#   "Link:   I'll open a PR"          → the user committing               KEEP
+#   "Megan:  I'll handle the deploy"  → somebody else's task              DROP
+#   "Link:   can you review my PR?"   → the user assigning someone else   DROP
+# Stripping the timestamp also stabilizes dedupe: the same line re-read a
+# minute later used to differ by its clock and read as a brand-new candidate.
+
+LEADING_TS = re.compile(r"^\[?\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?\s*\]?[\s\-—]*")
+TRAILING_TS = re.compile(
+    r"[\s\-—]*(?:today|yesterday|tomorrow)?[\s,]*(?:at\s+)?"
+    r"\d{1,2}:\d{2}\s*(?:[AaPp]\.?[Mm]\.?)?\s*$", re.I)
+# Display names carry spaces ("Sam Xu", "Austin Shin"). Missing that was not a
+# cosmetic bug: an unparsed speaker defaults to "the user", so every "I'm going
+# to …" anyone else typed was read as the user's own commitment.
+SPEAKER = re.compile(
+    r"^(?P<name>[A-Za-z][\w.\-]{0,23}(?:\s+[A-Za-z][\w.\-]{0,15}){0,2})\s*:\s+")
+BARE_TOKEN = re.compile(r"^[A-Za-z][\w.\-]*$")  # a lone name left after stripping
+
+# Who the user is, so first-person lines can be attributed. Override with
+# CR_USER_ALIASES="link,austin,ashin" if the chat handle differs.
+USER_ALIASES = {
+    a.strip().lower()
+    for a in os.environ.get("CR_USER_ALIASES", "link,austin,shinaustin,me").split(",")
+    if a.strip()
+}
+
+# The user's own stated obligation. Narrower than FIRST_PERSON on purpose:
+# "can you review my PR" is first-person but is the user assigning someone
+# ELSE work, which is not a reminder for the user.
+SELF_COMMIT = re.compile(
+    r"\b(i'?ll|i will|i'?m going to|i'?m gonna|i need to|i have to|i've got to|"
+    r"i gotta|i should|i must|let me|i'?m supposed to)\b", re.I)
+
+# Someone directing the user to do something. Covers the natural phrasings the
+# first version missed entirely — "make sure", "don't forget", "when you get a
+# chance" — and chat spellings of "you".
+DIRECTIVE = re.compile(
+    r"\b(can|could|would|will) (you|u|ya)\b|\bplease\b|\bmake sure\b|"
+    r"\bdon'?t forget\b|\bremember to\b|\bwhen (you|u) (get|have|can)\b|"
+    r"\b(you|u) (should|need to|have to|gotta|might want to)\b|"
+    r"\bmind \w+ing\b|\bwanna \w+\b|\bhave (you|u) \w+ed\b", re.I)
+
+
+def split_chat_line(line: str) -> tuple[str | None, str]:
+    """"[10:45 AM] Link: yea" → ("Link", "yea"). Chrome off, speaker out."""
+    s = LEADING_TS.sub("", line.strip())
+    speaker = None
+    m = SPEAKER.match(s)
+    if m:
+        speaker = m.group("name")
+        s = s[m.end():]
+    s = TRAILING_TS.sub("", s)
+    return speaker, s.strip()
+
+
+def is_metadata(text: str) -> bool:
+    """What's left is a bare name or nothing — a header row, not a message."""
+    return not text or bool(BARE_TOKEN.match(text))
 
 
 def source_policy(source: str) -> str:
@@ -188,24 +265,45 @@ def gate(text: str, source: str = "") -> list[str]:
     keep = []
     for raw in text.splitlines():
         line = raw.strip()
-        if len(line) < 15 or len(line) > 300:
+        if len(line) > 300 or SELF_REF.search(line) or SELF_UI_ROW.match(line):
             continue
-        if NOISE.match(line) or STRUCTURAL.match(line) or SELF_REF.search(line):
+        if NOISE.match(line) or STRUCTURAL.match(line):
             continue
 
-        if MENTION.search(line):
-            continue  # a *mention* of intent (quoted, templated), not an instance
-        if EXPLICIT.search(line):
-            keep.append(line)  # a plain statement of intent passes on any surface
+        # Chrome off before anything is judged, so a timestamp can never be the
+        # reason a line survives and the speaker becomes available as evidence.
+        speaker, body = split_chat_line(line)
+        if is_metadata(body) or len(body) < 12:
+            continue
+        if NOISE.match(body) or STRUCTURAL.match(body) or MENTION.search(body):
+            continue
+
+        # What the extractor sees: content, attributed. Keeping the speaker
+        # tells the LLM whose obligation it is; dropping the clock keeps the
+        # same sentence stable across re-reads for dedupe.
+        cleaned = f"{speaker}: {body}" if speaker else body
+
+        # Checked against the raw line too: "note to self: …" parses as a
+        # speaker named "note to self", which would strip the very phrase that
+        # makes it explicit.
+        if EXPLICIT.search(body) or EXPLICIT.search(line):
+            keep.append(cleaned)  # a plain statement of intent passes anywhere
             continue
         if policy != "full":
             continue  # non-conversational surface needs explicit intent
-        # Implied commitment: must be phrased as the user's own obligation or
-        # a direct ask of them, AND carry a commitment or temporal marker.
-        if not (FIRST_PERSON.search(line) or SECOND_PERSON.search(line)):
-            continue
-        if COMMIT.search(line) or TEMPORAL.search(line):
-            keep.append(line)
+
+        # Whose task is it? The speaker decides which test applies.
+        from_someone_else = speaker is not None and speaker.lower() not in USER_ALIASES
+        if from_someone_else:
+            # Only an instruction aimed at the user counts. Their own
+            # commitments ("I'll handle the deploy") are not the user's task.
+            if DIRECTIVE.search(body):
+                keep.append(cleaned)
+        else:
+            # The user, or an unattributed surface (their email, their notes):
+            # their own stated obligations count.
+            if SELF_COMMIT.search(body) or (DIRECTIVE.search(body) and EXPLICIT.search(body)):
+                keep.append(cleaned)
     return keep
 
 
@@ -254,6 +352,12 @@ STOP = {
 }
 
 
+def _stem(w: str) -> str:
+    """Crude plural strip. "update"/"updates" and "video"/"videos" are the same
+    task; a real stemmer is not worth a dependency for this."""
+    return w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w
+
+
 def action_key(action: str) -> frozenset:
     """Content words, for catching paraphrases the evidence hash misses.
 
@@ -261,20 +365,30 @@ def action_key(action: str) -> frozenset:
     ("GitHub paad's"), which changes the evidence hash. Comparing content-word
     sets survives both LLM rephrasing and OCR jitter.
     """
-    words = [w for w in normalize(action).split() if w not in STOP and len(w) > 2]
+    words = [_stem(w) for w in normalize(action).split()
+             if w not in STOP and len(w) > 2]
     return frozenset(words)
 
 
-def too_similar(key: frozenset, seen_keys: list[frozenset], thresh: float = 0.6) -> bool:
-    """Jaccard overlap against everything already surfaced."""
+def too_similar(key: frozenset, seen_keys: list[frozenset],
+                thresh: float = 0.6, containment: float = 0.75) -> bool:
+    """Overlap against everything already surfaced.
+
+    Two tests, because the duplicates come in two shapes. Jaccard catches
+    rewordings of similar length. Containment catches the case Jaccard misses:
+    one phrasing is a subset of a longer one ("send update videos" inside
+    "send one or two more update videos") — same task, but the extra words
+    push union up and Jaccard down.
+    """
     if not key:
         return False
     for other in seen_keys:
         if not other:
             continue
         inter = len(key & other)
-        union = len(key | other)
-        if union and inter / union >= thresh:
+        if inter / len(key | other) >= thresh:
+            return True
+        if inter / min(len(key), len(other)) >= containment:
             return True
     return False
 
@@ -492,12 +606,23 @@ def load_weights() -> dict:
 
 
 def score(c: Candidate, weights: dict) -> float:
-    s = c.confidence
-    for f in c.features:
-        w = weights.get(f)
-        if w:
-            s *= w["multiplier"]
-    return round(min(s, 1.0), 4)
+    """confidence, adjusted by the *average* learned signal.
+
+    Geometric mean, not a raw product. Multiplying six sub-1.0 multipliers
+    compounds: a 0.7-confidence candidate carrying six mildly-disliked
+    features scored 0.10 and nothing ever surfaced again — the learning layer
+    silently became an off switch. Averaging keeps the total adjustment inside
+    one feature's range (~0.4x–1.6x), so a feature votes rather than vetoes,
+    and adding more feature types can't change the scale.
+    """
+    mults = [weights[f]["multiplier"] for f in c.features if f in weights]
+    if not mults:
+        return round(min(c.confidence, 1.0), 4)
+    product = 1.0
+    for m in mults:
+        product *= m
+    adjustment = product ** (1.0 / len(mults))
+    return round(min(c.confidence * adjustment, 1.0), 4)
 
 
 def learn() -> dict:
@@ -539,7 +664,9 @@ def learn() -> dict:
 # ------------------------------------------------------------- pipeline ------
 
 THRESH_FIRE = 0.55  # >= interrupt with a card
-THRESH_INBOX = 0.30  # >= keep silently in the inbox; below this, drop
+THRESH_INBOX = 0.50  # >= keep silently in the inbox; below this, drop
+# 0.50, not 0.30: below half-confidence the extractor is guessing at whether
+# the user is even the one on the hook. Those cost more to read than they save.
 
 
 def state_path() -> Path:
