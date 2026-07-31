@@ -317,6 +317,37 @@ details summary{cursor:pointer;color:var(--dim);font-size:12px;outline:none}
 #internals{margin-top:44px;border-top:1px solid var(--line);padding-top:14px}
 #internals>summary{text-transform:uppercase;letter-spacing:.08em;font-weight:600}
 
+/* tabs */
+nav.tabs{position:sticky;top:0;z-index:5;background:var(--bg);
+  border-bottom:1px solid var(--line);padding:0 24px;display:flex;gap:2px;
+  overflow-x:auto;scrollbar-width:none}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{background:none;border:0;border-bottom:2px solid transparent;
+  border-radius:0;padding:12px 14px;color:var(--dim);font-size:13.5px;font-weight:520;
+  white-space:nowrap;transition:.12s}
+nav.tabs button:hover{color:var(--txt)}
+nav.tabs button.sel{color:var(--txt);border-bottom-color:var(--accent)}
+nav.tabs .n{font-size:11px;padding:1px 6px;border-radius:20px;background:var(--panel);
+  border:1px solid var(--line);margin-left:6px;color:var(--dim)}
+nav.tabs button.sel .n{border-color:var(--accent);color:var(--accent)}
+
+/* reminders, built to be read at a glance */
+.rem{display:flex;gap:0;background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;margin-bottom:9px;overflow:hidden}
+.rail{flex:0 0 104px;padding:14px 12px;text-align:right;border-right:1px solid var(--line);
+  background:linear-gradient(180deg,transparent,rgba(122,162,247,.04))}
+.rail b{display:block;font-size:15px;font-weight:640;letter-spacing:-.01em;white-space:nowrap}
+.rail span{display:block;color:var(--dim);font-size:11.5px;margin-top:2px}
+.rail.ctx b{color:var(--dim);font-size:13px}
+.body{flex:1;min-width:0;padding:14px 16px;display:flex;flex-direction:column;justify-content:center}
+.body .t{font-size:15.5px;font-weight:560;letter-spacing:-.01em}
+.body .s{color:var(--dim);font-size:12.5px;margin-top:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.soon .rail b{color:var(--warn)}
+.grp{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);
+  margin:20px 0 8px;font-weight:600}
+.grp:first-child{margin-top:4px}
+
 /* teaching surface */
 .teach{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
 .teachTop{display:flex;justify-content:space-between;align-items:center;
@@ -348,27 +379,27 @@ kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-b
   <span id="watch" class="pill"></span>
   <span class="ctx" id="ctx">…</span>
 </header>
+<nav class="tabs" id="tabs"></nav>
 <main>
-  <div class="stats" id="stats"></div>
+  <section data-tab="reminders">
+    <div id="rem"></div>
+  </section>
 
-  <h2>Coming up</h2>
-  <div id="rem"></div>
+  <section data-tab="delivered" hidden>
+    <div id="notifs"></div>
+  </section>
 
-  <h2>Delivered</h2>
-  <div id="notifs"></div>
+  <section data-tab="teach" hidden>
+    <div id="teach"></div>
+    <div id="trainbar"></div>
+    <details id="restQueue" style="margin-top:10px">
+      <summary>see the whole queue</summary>
+      <div id="sugg" style="margin-top:10px"></div>
+    </details>
+  </section>
 
-  <h2 id="suggHead">Teach it</h2>
-  <div id="teach"></div>
-  <div id="trainbar"></div>
-
-  <details id="restQueue" style="margin-top:10px">
-    <summary>see the whole queue</summary>
-    <div id="sugg" style="margin-top:10px"></div>
-  </details>
-
-  <details id="internals">
-    <summary>Internals — how it sees, learns, and scores</summary>
-    <div class="stats" id="devstats" style="margin-top:14px"></div>
+  <section data-tab="internals" hidden>
+    <div class="stats" id="devstats" style="margin-top:4px"></div>
     <div class="grid2">
       <div>
         <h2>What it's learned</h2>
@@ -379,13 +410,46 @@ kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-b
         <div id="caps"></div>
       </div>
     </div>
-  </details>
+  </section>
 </main>
 <script>
 const esc = s => (s??'').toString().replace(/[&<>"]/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let state = null; // latest /api/state payload, for channel toggling
+
+// ------------------------------------------------------------- tabs ---------
+// Four jobs, one at a time. Everything used to stack into a single scroll, so
+// the reminders — the only thing you open this page to check — were buried
+// under diagnostics. Selection persists: whichever view you live in is the one
+// you get back.
+const TABS = [
+  {id:'reminders', label:'Reminders', count:d=>d.counts.reminders_active},
+  {id:'delivered', label:'Delivered', count:d=>d.counts.notified_today},
+  {id:'teach',     label:'Teach',     count:d=>d.counts.open},
+  {id:'internals', label:'Internals', count:()=>null},
+];
+let tab = localStorage.getItem('cr.tab') || 'reminders';
+
+function setTab(id){
+  tab = id;
+  localStorage.setItem('cr.tab', id);
+  document.querySelectorAll('main > section').forEach(s=>{
+    s.hidden = s.dataset.tab !== id;
+  });
+  document.querySelectorAll('nav.tabs button').forEach(b=>{
+    b.classList.toggle('sel', b.dataset.tab === id);
+  });
+}
+
+function renderTabs(d){
+  document.getElementById('tabs').innerHTML = TABS.map(t=>{
+    const n = t.count(d);
+    return `<button data-tab="${t.id}" class="${t.id===tab?'sel':''}"
+      onclick="setTab('${t.id}')">${t.label}${
+        n ? `<span class="n">${n}</span>` : ''}</button>`;
+  }).join('');
+}
 
 function fmtDue(ts){
   const s = ts - Date.now()/1000;
@@ -405,6 +469,62 @@ function fmtAgo(iso){
   if (s < 3600) return `${Math.round(s/60)} min ago`;
   if (d.toDateString() === new Date().toDateString()) return clock;
   return d.toLocaleDateString([], {weekday:'short'}) + ' ' + clock;
+}
+
+// ------------------------------------------------------- reminders ----------
+// Read at a glance means: answer "when" before "what". The time is pulled out
+// into a fixed left rail so a column of reminders scans vertically as a
+// schedule, instead of forcing you to read each sentence to find the clock.
+// Timed ones sort by when they fire; contextual ones can't be sorted that way
+// (they fire on an event, not a time) so they group below under their own
+// heading rather than pretending to have a place in the order.
+
+function railFor(r){
+  if(r.dueAt){
+    const s = r.dueAt - Date.now()/1000;
+    const clock = new Date(r.dueAt*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+    const day = new Date(r.dueAt*1000).toDateString() !== new Date().toDateString()
+      ? new Date(r.dueAt*1000).toLocaleDateString([],{weekday:'short'}) + ' ' : '';
+    let rel;
+    if(s <= 0) rel = 'now';
+    else if(s < 90) rel = `${Math.round(s)}s`;
+    else if(s < 5400) rel = `${Math.round(s/60)} min`;
+    else if(s < 129600) rel = `${(s/3600).toFixed(1)} hr`;
+    else rel = `${Math.round(s/86400)} days`;
+    return {cls: s < 900 ? 'soon' : '', top: day+clock, sub: rel};
+  }
+  const map = {pending:'waiting', armed:'watching', cooldown:'watching',
+               ready:'any moment', snoozed:'snoozed', fired:'reminded'};
+  return {cls:'ctx', top: map[r.state] || r.state, sub: r.state==='pending'?'not seen yet':'on your screen'};
+}
+
+function renderReminders(list){
+  const el = document.getElementById('rem');
+  if(!list.length){
+    el.innerHTML = `<div class="card empty">
+      Nothing scheduled.<br>Say “hey wispr, remind me to …” or press ⌃⌥⌘N.</div>`;
+    return;
+  }
+  const timed = list.filter(r=>r.dueAt).sort((a,b)=>a.dueAt-b.dueAt);
+  const ctx   = list.filter(r=>!r.dueAt);
+  const row = r => {
+    const rail = railFor(r);
+    const where = r.referent && r.referent.label && r.referent.label !== 'anywhere'
+      ? r.referent.label : '';
+    return `<div class="rem ${rail.cls}">
+      <div class="rail ${rail.cls==='ctx'?'ctx':''}">
+        <b>${esc(rail.top)}</b><span>${esc(rail.sub)}</span>
+      </div>
+      <div class="body">
+        <div class="t">${esc(r.text)}</div>
+        <div class="s">${where?'📍 '+esc(where):''}</div>
+        <div class="chips">${chipRow(r)}</div>
+      </div>
+    </div>`;
+  };
+  el.innerHTML =
+    (timed.length ? `<div class="grp">Scheduled</div>` + timed.map(row).join('') : '') +
+    (ctx.length ? `<div class="grp">Watching your screen</div>` + ctx.map(row).join('') : '');
 }
 
 // one plain-language line per reminder — no state-machine jargon
@@ -449,11 +569,7 @@ async function load(){
     + `${d.watching?'watching':'idle'}${d.voice?' · 🎙 listening':''}`;
 
   const c = d.counts;
-  document.getElementById('stats').innerHTML = [
-    ['coming up', c.reminders_active],
-    ['delivered today', c.notified_today],
-    ['suggestions', c.open],
-  ].map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
+  renderTabs(d);
 
   // non-default delivery is worth calling out; a plain local card is assumed
   const chPills = ch => (ch && (ch.length > 1 || ch[0] !== 'card'))
@@ -488,15 +604,7 @@ async function load(){
       </div></div>`).join('')
     : `<div class="card empty">Nothing waiting.</div>`;
 
-  document.getElementById('rem').innerHTML = d.reminders.length
-    ? d.reminders.map(r=>`<div class="card"><div class="row">
-        <div class="grow">
-          <div class="act">${esc(r.text)}</div>
-          <div class="meta">${esc(stateLine(r))}${r.referent&&r.referent.label&&r.referent.label!=='anywhere'?' · 📍 '+esc(r.referent.label):''}</div>
-          <div class="chips">${chipRow(r)}</div>
-        </div>
-      </div></div>`).join('')
-    : `<div class="card empty">Nothing yet. Say “hey wispr, remind me to …” — or press fn⇧⌘N.</div>`;
+  renderReminders(d.reminders || []);
 
   document.getElementById('devstats').innerHTML = [
     ['ocr captures today', c.captures_today],
@@ -521,10 +629,7 @@ async function load(){
 }
 
 // remember whether the internals drawer was open
-const internals = document.getElementById('internals');
-internals.open = localStorage.getItem('cr.internals') === '1';
-internals.addEventListener('toggle',
-  () => localStorage.setItem('cr.internals', internals.open ? '1' : '0'));
+setTab(tab);  // restore the view you were last in, before the first fetch lands
 
 // ---------------------------------------------------------- teaching --------
 // Labeling is the only thing the learning layer runs on, so the cost of one
@@ -632,6 +737,10 @@ async function train(){
 document.addEventListener('keydown', e=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   if(/^(input|textarea)$/i.test(e.target.tagName)) return;
+  // 1-4 jump between views from anywhere
+  const n = parseInt(e.key, 10);
+  if(n >= 1 && n <= TABS.length){ setTab(TABS[n-1].id); e.preventDefault(); return; }
+  if(tab !== 'teach') return;   // labeling keys belong to the teaching view only
   const k = e.key.toLowerCase();
   if(k==='y') label('accept');
   else if(k==='n') label('dismiss');
