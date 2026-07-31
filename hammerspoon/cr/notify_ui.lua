@@ -63,8 +63,13 @@ function M.show(opts)
   if #body > 180 then body = body:sub(1, 177) .. "…" end
   local lines = math.max(1, math.min(3, math.ceil(#body / 46)))
   local bodyH = lines * 17
+  -- `lead` is the one thing the card is about, set above the supporting text.
+  -- A confirmation whose subject is the same size as its footnotes makes you
+  -- read the whole card to find out what it confirmed.
+  local lead = opts.lead
+  local leadH = lead and (math.max(1, math.min(2, math.ceil(#lead / 34))) * 21 + 4) or 0
   local hasActions = opts.actions and #opts.actions > 0
-  local H = pad + 20 + 6 + bodyH + (hasActions and 46 or pad)
+  local H = pad + 20 + 6 + leadH + bodyH + (hasActions and 46 or pad)
 
   local screen = hs.screen.mainScreen():frame()
   local c = hs.canvas.new({
@@ -108,9 +113,17 @@ function M.show(opts)
       frame = { x = W - pad - 16, y = pad - 1, w = 18, h = 18 },
     }
   end
+  local ty = pad + 21
+  if lead then
+    c[#c + 1] = {
+      type = "text", text = lead, textSize = 15, textColor = pal.title,
+      frame = { x = pad + 34, y = ty, w = W - pad * 2 - 34, h = leadH },
+    }
+    ty = ty + leadH
+  end
   c[#c + 1] = {
     type = "text", text = body, textSize = 12.5, textColor = pal.body,
-    frame = { x = pad + 34, y = pad + 21, w = W - pad * 2 - 34, h = bodyH + 4 },
+    frame = { x = pad + 34, y = ty, w = W - pad * 2 - 34, h = bodyH + 4 },
   }
 
   local function dismiss(reasonEvent)

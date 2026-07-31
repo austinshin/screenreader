@@ -121,6 +121,29 @@ function M.add(text, snap, opts)
   return r
 end
 
+-- Confirmation, in the same corner and the same visual language as the
+-- reminders themselves — an hs.alert in the middle of the screen was a
+-- different-looking object saying a related thing, which reads as a system
+-- message rather than as "here is your reminder". Auto-dismisses: this is a
+-- receipt, not something to answer, and only reminders earn a sticky card.
+function M.confirm(r)
+  local tier = require("cr.tier")
+  local when = r.dueAt and (timeparse.fmtDue(r.dueAt) or "")
+    or (r.state == "pending"
+        and ("waits for " .. (r.referent and r.referent.label or "it") .. " to appear")
+        or ("when you're done with " .. (r.referent and r.referent.label or "this")))
+  ui.show({
+    title = "Reminder created · " .. (os.date("%I:%M %p"):gsub("^0", "")),
+    lead  = r.text,
+    body  = string.format("%s\n%s · %s", when,
+              tier.LABEL[r.tier or 2].name,
+              table.concat(r.channels or { "card" }, " + ")),
+    icon = "✅",
+    urgency = "success",
+    duration = 5,
+  })
+end
+
 -- One-line summary of when/where/how a reminder will surface — shared by the
 -- voice toast, the hotkey toast, and logs so every path tells the same story.
 function M.describe(r)
@@ -184,9 +207,11 @@ function M.promptNew()
   if button ~= "Remind me" or not text or text == "" then return end
   local r = M.add(text, snap, { via = "hotkey" })
   if r then
-    ui.toast('"' .. r.text .. '" — ' .. M.describe(r), 3.2)
+    M.confirm(r)
   else
-    ui.toast("⚠️ Nothing bindable on screen — reminder not created", 2.2)
+    ui.show({ title = "Not created", lead = text,
+              body = "Nothing on screen to attach it to — try adding a time.",
+              icon = "⚠️", urgency = "warn", duration = 5 })
   end
 end
 

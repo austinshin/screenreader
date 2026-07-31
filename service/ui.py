@@ -115,6 +115,10 @@ def snapshot() -> dict:
     watching = hs("return tostring(CR.screenText.watching)") == "true"
     voice = hs("return tostring(CR.voice and CR.voice.running)") == "true"
 
+    # the inference experiment is opt-in; when it's off its UI shouldn't be
+    # there at all — a tab for a disabled feature is just a dead end
+    suggestions_on = hs("return tostring(CR.config.suggestions.enabled ~= false)") == "true"
+
     # keybindings come from the Lua registry, never a copy kept here
     try:
         hotkeys = json.loads(hs("return hs.json.encode(CR.hotkeys.list())") or "[]")
@@ -161,6 +165,7 @@ def snapshot() -> dict:
         },
         "channels_available": channels_available,
         "hotkeys": hotkeys,
+        "suggestions_on": suggestions_on,
         "notifications": [dict(e, _key=delivered_key(e)) for e in notifications[-25:]],
         "delivered_hidden": len(all_delivered) - len(notifications),
         "training": {
@@ -399,6 +404,8 @@ nav.tabs button.sel .n{border-color:var(--accent);color:var(--accent)}
 .rem.t1 .rail{background:linear-gradient(180deg,transparent,rgba(247,118,142,.10))}
 .rem.t1 .rail b{color:var(--bad)}
 .rem.t4{opacity:.72}
+.acts{display:flex;flex-direction:column;gap:5px;padding:13px 13px 13px 0;justify-content:center}
+.acts button{font-size:11.5px;padding:4px 9px}
 
 /* teaching surface */
 .teach{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
@@ -533,6 +540,7 @@ function renderTabs(d){
       onclick="setTab('${t.id}')">${t.label}${
         n ? `<span class="n">${n}</span>` : ''}</button>`;
   }).join('');
+  window.__tabs = shown;
 }
 
 function fmtDue(ts){
@@ -630,6 +638,11 @@ function renderReminders(list){
         ${lines(r).map(l=>`<div class="prov">↳ ${l}</div>`).join('')}
         ${r.tierWhy?`<div class="prov dim">↳ ${esc(TIERS[t].note)} — ${esc(r.tierWhy)}</div>`:''}
         <div class="chips">${chipRow(r)}</div>
+      </div>
+      <div class="acts">
+        <button class="y" title="Mark done" onclick="setRemState('${esc(r.id)}','done')">Done</button>
+        <button title="Edit text" onclick="editRem('${esc(r.id)}')">Edit</button>
+        <button class="n" title="Cancel" onclick="setRemState('${esc(r.id)}','cancelled')">✕</button>
       </div>
     </div>`;
   };
@@ -868,7 +881,8 @@ document.addEventListener('keydown', e=>{
   if(/^(input|textarea)$/i.test(e.target.tagName)) return;
   // 1-4 jump between views from anywhere
   const n = parseInt(e.key, 10);
-  if(n >= 1 && n <= TABS.length){ setTab(TABS[n-1].id); e.preventDefault(); return; }
+  const tabs = window.__tabs || TABS;
+  if(n >= 1 && n <= tabs.length){ setTab(tabs[n-1].id); e.preventDefault(); return; }
   if(tab !== 'teach') return;   // labeling keys belong to the teaching view only
   const k = e.key.toLowerCase();
   if(k==='y') label('accept');
@@ -964,6 +978,22 @@ document.addEventListener('keydown', async e=>{
   }
 }, true);
 
+async function setRemState(id, st){
+  await fetch('/api/reminder/state',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({id, state:st})});
+  load();
+}
+
+async function editRem(id){
+  const r = (state.reminders||[]).find(x=>x.id===id);
+  if(!r) return;
+  const text = prompt('Reminder text:', r.text);
+  if(text === null || !text.trim() || text === r.text) return;
+  await fetch('/api/reminder/text',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({id, text})});
+  load();
+}
+
 async function judge(id, value){
   const el = $('c-'+id);
   if(el){ el.style.opacity=.35; }
@@ -1011,6 +1041,31 @@ class Handler(BaseHTTPRequestHandler):
             if cand:
                 write_feedback(cand, payload.get("value", "dismiss"))
             self._send(200, json.dumps({"ok": bool(cand)}).encode(), "application/json")
+
+        elif path == "/api/reminder/state":
+            # Lua owns reminders.json; going through it keeps its in-memory
+            # copy and the file from diverging.
+            rid = str(payload.get("id", ""))
+            st = str(payload.get("state", ""))
+            if not rid.isalnum() or st not in ("done", "cancelled", "pending"):
+                self._send(400, b'{"ok":false}', "application/json"); return
+            lua = ("local r = CR.reminders.get('%s'); if not r then return 'no' end; "
+                   "CR.reminders.setState(r, '%s', 'web'); "
+                   "if CR.menubar then pcall(CR.menubar.refresh) end; return 'ok'") % (rid, st)
+            ok = hs(lua, timeout=10) == "ok"
+            self._send(200, json.dumps({"ok": ok}).encode(), "application/json")
+
+        elif path == "/api/reminder/text":
+            rid = str(payload.get("id", ""))
+            text = str(payload.get("text", "")).strip()[:200]
+            if not rid.isalnum() or not text:
+                self._send(400, b'{"ok":false}', "application/json"); return
+            safe = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
+            lua = ("local r = CR.reminders.get('%s'); if not r then return 'no' end; "
+                   "r.text = '%s'; CR.reminders.persist(); "
+                   "if CR.menubar then pcall(CR.menubar.refresh) end; return 'ok'") % (rid, safe)
+            ok = hs(lua, timeout=10) == "ok"
+            self._send(200, json.dumps({"ok": ok}).encode(), "application/json")
 
         elif path == "/api/hotkey":
             # Validation lives in Lua with the binder, not here: only it knows

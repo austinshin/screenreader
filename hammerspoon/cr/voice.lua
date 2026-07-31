@@ -211,9 +211,12 @@ local function fire(text)
   local chime = hs.sound.getByName("Glass")
   if chime then chime:play() end
   if r then
-    listening.created(r.text, r.dueAt and timeparse.fmtDue(r.dueAt)
-      or ("when you're done with " .. (r.referent and r.referent.label or "this")))
-    ui.toast('🎙 "' .. r.text .. '" — ' .. reminders.describe(r), 3.5)
+    -- Hand off rather than double up: the HUD's job was live feedback while
+    -- you spoke, and it ends the moment there is something to confirm. The
+    -- card is the receipt, in the same corner and style as the reminders
+    -- themselves, so two surfaces never say the same thing at once.
+    listening.hide()
+    reminders.confirm(r)
   else
     listening.rejected("couldn't attach that to anything on screen")
   end
