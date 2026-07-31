@@ -497,6 +497,21 @@ function $(id){
   return n || {innerHTML:'', textContent:'', style:{}, classList:{toggle(){}, add(){}}};
 }
 
+// Every section renders from one load(), so an exception anywhere used to blank
+// everything after it — including the reminders, which is the one thing the
+// page exists to show. A section that throws now costs only itself and says so
+// on the page, rather than failing silently as empty space.
+function section(name, fn){
+  try { fn(); }
+  catch(e){
+    console.error('[cr] ' + name + ' failed:', e);
+    const box = document.getElementById(name);
+    if(box) box.innerHTML = `<div class="card empty">
+      Couldn't render this section — ${esc(e.message)}<br>
+      <span style="opacity:.6">details in the browser console</span></div>`;
+  }
+}
+
 let state = null; // latest /api/state payload, for channel toggling
 
 // Words, never numbers — "tier 2" is an internal model, not something to
@@ -534,13 +549,16 @@ function setTab(id){
 }
 
 function renderTabs(d){
-  $('tabs').innerHTML = TABS.map(t=>{
+  // a tab for a disabled experiment is a dead end; drop it entirely
+  const shown = TABS.filter(t => t.id !== 'teach' || d.suggestions_on);
+  if(!d.suggestions_on && tab === 'teach') setTab('reminders');
+  $('tabs').innerHTML = shown.map(t=>{
     const n = t.count(d);
     return `<button data-tab="${t.id}" class="${t.id===tab?'sel':''}"
       onclick="setTab('${t.id}')">${t.label}${
         n ? `<span class="n">${n}</span>` : ''}</button>`;
   }).join('');
-  window.__tabs = shown;
+  window.__tabs = shown;   // number keys index what's actually shown
 }
 
 function fmtDue(ts){
@@ -587,7 +605,9 @@ function railFor(r){
   }
   const map = {pending:'waiting', armed:'watching', cooldown:'watching',
                ready:'any moment', snoozed:'snoozed', fired:'reminded'};
-  return {cls:'ctx', top: map[r.state] || r.state, sub: r.state==='pending'?'not seen yet':'on your screen'};
+  // only a sub-label that adds something: "on your screen" restated the state
+  return {cls:'ctx', top: map[r.state] || r.state,
+          sub: r.state==='pending' ? 'not seen yet' : ''};
 }
 
 function renderReminders(list){
@@ -618,11 +638,9 @@ function renderReminders(list){
         ? `set while you were in ${esc(place)} <span class="dim">(not a trigger)</span>`
         : `while you were in ${esc(place)}`);
     }
-    if(!r.dueAt){
-      out.push(r.state === 'pending'
-        ? 'surfaces once that comes back on screen, then goes away again'
-        : 'surfaces when you’re done with it');
-    }
+    // No line here for "surfaces when you're done" — the group header above
+    // already says exactly that, and a row that restates its own heading is
+    // three sentences to learn one fact.
     return out;
   };
 
@@ -636,7 +654,6 @@ function renderReminders(list){
       <div class="body">
         <div class="t">${esc(r.text)}</div>
         ${lines(r).map(l=>`<div class="prov">↳ ${l}</div>`).join('')}
-        ${r.tierWhy?`<div class="prov dim">↳ ${esc(TIERS[t].note)} — ${esc(r.tierWhy)}</div>`:''}
         <div class="chips">${chipRow(r)}</div>
       </div>
       <div class="acts">
@@ -702,8 +719,8 @@ async function load(){
     + `${d.watching?'watching':'idle'}${d.voice?' · 🎙 listening':''}`;
 
   const c = d.counts;
-  renderTabs(d);
-  renderHotkeys();
+  section('tabs', () => renderTabs(d));
+  section('hotkeys', () => renderHotkeys());
 
   // non-default delivery is worth calling out; a plain local card is assumed
   const chPills = ch => (ch && (ch.length > 1 || ch[0] !== 'card'))
@@ -730,8 +747,8 @@ async function load(){
 
   const open = d.suggestions || [];
   queue = open;   // the count now lives in the tab bar, not a heading
-  renderTeach();
-  renderTrainBar();
+  section('teach', () => renderTeach());
+  section('trainbar', () => renderTrainBar());
 
   $('sugg').innerHTML = open.length
     ? open.map(s=>`<div class="card" id="c-${esc(s.id)}"><div class="row">
@@ -745,7 +762,7 @@ async function load(){
       </div></div>`).join('')
     : `<div class="card empty">Nothing waiting.</div>`;
 
-  renderReminders(d.reminders || []);
+  section('rem', () => renderReminders(d.reminders || []));
 
   $('devstats').innerHTML = [
     ['ocr captures today', c.captures_today],
@@ -849,7 +866,7 @@ async function label(value){
   if(!c) return;
   queue.splice(cursor, 1);                    // advance immediately
   if(cursor >= queue.length) cursor = Math.max(0, queue.length-1);
-  renderTeach();
+  section('teach', () => renderTeach());
   await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id:c.id, value})});
   load();

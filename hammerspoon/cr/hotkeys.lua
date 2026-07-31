@@ -23,6 +23,7 @@ local M = { handlers = {}, bound = {} }
 -- phrased as the thing you want, not the function that does it.
 M.ACTIONS = {
   { id = "reminder", label = "New reminder",             mods = { "ctrl", "alt", "cmd" }, key = "n" },
+  { id = "glance",   label = "Show my reminders",        mods = { "cmd", "alt", "shift" }, key = "r" },
   { id = "voice",    label = "Voice listening on/off",   mods = { "ctrl", "alt", "cmd" }, key = "m" },
   { id = "ocr",      label = "Read this window once",    mods = { "ctrl", "alt", "cmd" }, key = "s" },
   { id = "watch",    label = "Watch mode (auto-read)",   mods = { "ctrl", "alt", "cmd" }, key = "w" },

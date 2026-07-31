@@ -31,6 +31,22 @@ end
 
 -- The card for a fired reminder. Built separately from fire() so an unanswered
 -- reminder can be put back on screen without re-firing it.
+-- Defer by a fixed number of minutes, from now. Works for both kinds: a timed
+-- reminder moves its clock, a contextual one stops watching and comes back on
+-- the clock instead — otherwise "in 5 minutes" would mean "in 5 minutes, if
+-- you also happen to finish that thing", which is not what anyone means.
+local function deferBy(r, minutes, label)
+  r.dueAt = os.time() + minutes * 60
+  reminders.setState(r, "scheduled", label)
+  log.append({ event = "feedback", value = "defer", minutes = minutes, id = r.id })
+  require("cr.why").note("reminder pushed back", r.text, {
+    { "you pressed", label },
+    { "now due", os.date("%I:%M %p", r.dueAt):gsub("^0", "") },
+  })
+end
+
+-- The card for a fired reminder. Built separately from fire() so an unanswered
+-- reminder can be put back on screen without re-firing it.
 local function cardFor(r, timed)
   local actions = {
     {
@@ -41,32 +57,17 @@ local function cardFor(r, timed)
       end,
     },
     {
+      -- The common answer to a reminder is "yes, but not this second", and it
+      -- was previously two clicks away behind a generic Snooze. Naming the
+      -- interval means you don't have to remember what Snooze is set to.
+      label = "5 min",
+      fn = function() deferBy(r, 5, "5 min") end,
+    },
+    {
       label = "Snooze",
-      fn = function()
-        if r.dueAt then
-          -- timed reminder: push the clock, back onto the schedule
-          r.dueAt = os.time() + cfg().snoozeMinutes * 60
-          reminders.setState(r, "scheduled", "snoozed")
-        else
-          r.snoozeUntil = os.time() + cfg().snoozeMinutes * 60
-          reminders.setState(r, "snoozed")
-        end
-        log.append({ event = "feedback", value = "snooze", id = r.id })
-      end,
+      fn = function() deferBy(r, cfg().snoozeMinutes, "Snooze") end,
     },
   }
-  if not timed then
-    actions[#actions + 1] = {
-      label = "Too early",
-      fn = function()
-        -- the false-positive button: user is NOT done with the thing.
-        -- back to PENDING — re-arms on next sighting, full cycle again.
-        r.absent = 0
-        reminders.setState(r, "pending", "too_early")
-        log.append({ event = "feedback", value = "too_early", id = r.id })
-      end,
-    }
-  end
   return {
     title = "Reminder",
     body = r.text,

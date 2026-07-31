@@ -8,6 +8,7 @@ local viewer = require("cr.viewer")
 local suggestions = require("cr.suggestions")
 local voice = require("cr.voice")
 local keys = require("cr.keys")
+local glance = require("cr.glance")
 local ui = require("cr.notify_ui")
 local log = require("cr.log")
 
@@ -78,6 +79,10 @@ local function menu()
     { title = status .. "  ·  " .. ctxLine, disabled = true },
     { title = "-" },
     { title = "New reminder…   ⌃⌥⌘N", fn = reminders.promptNew },
+    {
+      title = (glance.visible and "Hide" or "Show") .. " my reminders   ⌘⌥⇧R",
+      fn = glance.toggle,
+    },
     {
       title = screenText.watching
         and "Stop screen watching   ⌃⌥⌘W"

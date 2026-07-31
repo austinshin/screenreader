@@ -30,6 +30,7 @@ local suggestions = require("cr.suggestions")
 local menubar  = require("cr.menubar")
 local voice    = require("cr.voice")
 local keys     = require("cr.keys")
+local glance   = require("cr.glance")
 local hotkeys  = require("cr.hotkeys")
 
 log.append({ event = "cr.loaded", projectDir = projectDir })
@@ -60,6 +61,7 @@ keys.restore()            -- sticky ⌃⌥⌘K hotkey cheatsheet
 -- that doesn't work — so fn is deliberately unsupported.
 hotkeys.handlers = {
   reminder = reminders.promptNew,
+  glance   = glance.toggle,
   voice    = voice.toggle,
   ocr      = screenText.demo,
   watch    = screenText.toggleWatch,
@@ -76,7 +78,7 @@ hotkeys.apply()
 M.config, M.log, M.observer, M.ui, M.notifier, M.menubar = config, log, observer, ui, notifier, menubar
 M.matcher, M.reminders, M.trigger, M.screenText = matcher, reminders, trigger, screenText
 M.viewer, M.suggestions, M.voice, M.keys = viewer, suggestions, voice, keys
-M.hotkeys = hotkeys
+M.hotkeys, M.glance = hotkeys, glance
 CR = M
 
 print("[cr] Contextual Reminders loaded — project: " .. tostring(projectDir))
