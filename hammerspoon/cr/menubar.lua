@@ -6,6 +6,8 @@ local reminders = require("cr.reminders")
 local screenText = require("cr.screen_text")
 local viewer = require("cr.viewer")
 local suggestions = require("cr.suggestions")
+local voice = require("cr.voice")
+local keys = require("cr.keys")
 local ui = require("cr.notify_ui")
 local log = require("cr.log")
 
@@ -75,7 +77,7 @@ local function menu()
     { title = "Contextual Reminders", disabled = true },
     { title = status .. "  ·  " .. ctxLine, disabled = true },
     { title = "-" },
-    { title = "New reminder…   ⌃⌥⌘R", fn = reminders.promptNew },
+    { title = "New reminder…   ⌃⌥⌘N", fn = reminders.promptNew },
     {
       title = screenText.watching
         and "Stop screen watching   ⌃⌥⌘W"
@@ -83,8 +85,18 @@ local function menu()
       fn = screenText.toggleWatch,
     },
     {
+      title = (voice.running and "Stop" or "Start") .. " voice (\"hey wispr…\")   ⌃⌥⌘M",
+      fn = voice.toggle,
+    },
+    {
       title = (viewer.visible and "Hide" or "Show") .. " OCR viewer   ⌃⌥⌘V",
       fn = viewer.toggle,
+    },
+    -- the discoverable route to the cheatsheet: if you've forgotten the chords,
+    -- the one place you'll still look is the menu bar
+    {
+      title = (keys.visible and "Hide" or "Show") .. " hotkey cheatsheet   ⌃⌥⌘K",
+      fn = keys.toggle,
     },
   }
   local rows = reminderRows()

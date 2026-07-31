@@ -29,6 +29,7 @@ local viewer   = require("cr.viewer")
 local suggestions = require("cr.suggestions")
 local menubar  = require("cr.menubar")
 local voice    = require("cr.voice")
+local keys     = require("cr.keys")
 
 log.append({ event = "cr.loaded", projectDir = projectDir })
 
@@ -44,6 +45,7 @@ viewer.restore()          -- sticky ⌃⌥⌘V viewer panel
 suggestions.start()
 suggestions.onChange = menubar.refresh
 voice.restore()           -- sticky ⌃⌥⌘M voice wake phrase ("hey wispr…")
+keys.restore()            -- sticky ⌃⌥⌘K hotkey cheatsheet
 
 -- hotkeys (⌃⌥⌘ layer; alt+space stays with the file opener)
 -- ⌃⌥⌘N, NOT fn⇧⌘N. Supporting fn means an hs.eventtap, and an eventtap puts a
@@ -63,14 +65,15 @@ hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "w", screenText.toggleWatch)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "v", viewer.toggle)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "i", suggestions.review)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "m", voice.toggle)
+hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "k", keys.toggle)
 
 -- global handle for console debugging: hs -c "print(hs.inspect(CR.observer.current))"
 M.config, M.log, M.observer, M.ui, M.notifier, M.menubar = config, log, observer, ui, notifier, menubar
 M.matcher, M.reminders, M.trigger, M.screenText = matcher, reminders, trigger, screenText
-M.viewer, M.suggestions, M.voice = viewer, suggestions, voice
+M.viewer, M.suggestions, M.voice, M.keys = viewer, suggestions, voice, keys
 CR = M
 
 print("[cr] Contextual Reminders loaded — project: " .. tostring(projectDir))
-print("[cr] hotkeys: ⌃⌥⌘N reminder · 🎙 \"hey wispr, remind me to …\" (⌃⌥⌘M) · ⌃⌥⌘S OCR · ⌃⌥⌘W watch · ⌃⌥⌘V viewer · ⌃⌥⌘T test · ⌃⌥⌘C context")
+print("[cr] hotkeys: ⌃⌥⌘K cheatsheet · ⌃⌥⌘N reminder · 🎙 \"hey wispr, remind me to …\" (⌃⌥⌘M) · ⌃⌥⌘S OCR · ⌃⌥⌘W watch · ⌃⌥⌘V viewer · ⌃⌥⌘T test · ⌃⌥⌘C context")
 
 return M
