@@ -9,10 +9,14 @@ Pipeline per capture:
                  drops ~everything       rules|claude   vs seen    learned      (Lua surfaces these)
                                                                   weights
 
-Two extractor backends, same interface:
+Three extractor backends, same interface:
 
   rules   deterministic patterns; no API key, no network, fully replayable.
   claude  Claude API with structured output; catches phrasings no regex will.
+  local   any Ollama model, on this machine. Closes the one hole in the privacy
+          story — OCR and speech are already on-device, and this keeps screen
+          text there too. Chosen automatically when Ollama is running. Model
+          size is the whole decision: see LOCAL_MODEL below.
 
 The gate runs first in both cases — it is the cost control. Full-screen OCR
 produces a lot of text per capture, and the overwhelming majority of it is not
@@ -538,9 +542,148 @@ def extract_claude(lines: list[str], entry: dict) -> list[Candidate]:
     return out
 
 
+# ------------------------------------------------------------ local model ----
+# The privacy story has one hole. OCR is on-device (Apple Vision), speech is
+# on-device (hear -d), and then the surviving lines are posted to an API. For a
+# tool whose whole premise is reading your screen, closing that is worth real
+# quality: the gate already drops ~99.8% of lines, so a local model is only
+# asked to judge the ~100 that survive a day, not the 45,000 that don't.
+#
+# Talks to Ollama over plain HTTP rather than importing a client, so the
+# service keeps its single dependency. Any instruct model works — 3B is enough
+# because the gate has already answered "is this plausibly a task", leaving
+# only "is it *this user's* task", which is a much smaller question.
+
+# MODEL SIZE IS THE WHOLE DECISION, and it is a throughput problem, not a
+# quality one. Watch mode captures every ~20s, so extraction has to finish in
+# well under that or the queue grows without bound and never recovers.
+#
+# Measured on this machine (M1 Pro, 16GB): gemma4 at 9.6GB took **140 seconds**
+# for a 200-token reply and returned empty content — the weights barely fit
+# alongside everything else, so it thrashes. A 3B model (~2GB) is the right
+# class here and lands in low single-digit seconds.
+#
+# That is affordable because the gate has already done the hard filtering: a
+# day of screen text is ~45,000 lines and ~100 reach the extractor. The model
+# is not asked "is this plausibly a task" — regex answered that — only "is it
+# *this user's* task", which is a much smaller question and one a small
+# instruct model can hold.
+OLLAMA_URL = os.environ.get("CR_OLLAMA_URL", "http://localhost:11434")
+LOCAL_MODEL = os.environ.get("CR_LOCAL_MODEL", "llama3.2:3b")
+LOCAL_TIMEOUT = float(os.environ.get("CR_LOCAL_TIMEOUT", "45"))
+LOCAL_SLOW_MS = 15000  # past this, the model is too big to keep up with capture
+
+
+def ollama_available() -> str | None:
+    """The model to use, or None. Prefers CR_LOCAL_MODEL; falls back to any
+    installed model so a machine with *something* pulled still works.
+
+    The 1.5s budget is deliberately a liveness check, not just discovery. An
+    oversized model doesn't merely answer slowly — it wedges the whole server
+    while it thrashes, and /api/tags stops responding too. If the daemon can't
+    say what it has within a second and a half, it certainly can't extract
+    before the next capture, so treating that as "not available" and falling
+    back is correct rather than pessimistic.
+    """
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=1.5) as r:
+            names = [m["name"] for m in json.load(r).get("models", [])]
+    except Exception:
+        return None
+    if not names:
+        return None
+    for n in names:                      # exact, then prefix (":latest" tags)
+        if n == LOCAL_MODEL:
+            return n
+    for n in names:
+        if n.split(":")[0] == LOCAL_MODEL.split(":")[0]:
+            return n
+    return names[0]
+
+
+def extract_local(lines: list[str], entry: dict) -> list[Candidate]:
+    """Same contract as extract_claude, run on this machine."""
+    import urllib.request
+    model = ollama_available()
+    if not model:
+        return []
+    numbered = "\n".join(f"{i+1}. {l}" for i, l in enumerate(lines))
+    body = json.dumps({
+        "model": model,
+        "stream": False,
+        # Ollama takes a JSON schema here and constrains decoding to it, which
+        # matters far more for a small model than a large one: without it they
+        # narrate, apologise, and wrap JSON in prose.
+        "format": EXTRACT_SCHEMA,
+        "options": {"temperature": 0},
+        "messages": [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content":
+                f"Context: the user was in {entry.get('source','?')} at "
+                f"{entry.get('iso','?')}.\n\nCandidate lines from the screen:\n"
+                f"{numbered}\n\nExtract reminders per your instructions."},
+        ],
+    }).encode()
+    req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=body,
+                                 headers={"Content-Type": "application/json"})
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=LOCAL_TIMEOUT) as r:
+            payload = json.load(r)
+        content = payload["message"]["content"]
+        data = json.loads(content)
+    except Exception as e:
+        took = time.time() - t0
+        print(f"  local model ({model}) failed after {took:.0f}s: {e}", file=sys.stderr)
+        if took >= LOCAL_TIMEOUT - 1:
+            # Say the useful thing rather than the literal one: a timeout here
+            # almost always means the model is too large for this machine, not
+            # that anything is broken.
+            print(f"  → {model} is too slow to keep up with capture. Try a ~3B "
+                  f"model: ollama pull llama3.2:3b", file=sys.stderr)
+        return []
+    took_ms = (time.time() - t0) * 1000
+    if took_ms > LOCAL_SLOW_MS:
+        print(f"  note: {model} took {took_ms/1000:.0f}s — captures arrive every "
+              f"~20s, so a smaller model will keep up better", file=sys.stderr)
+    if not str(content).strip():
+        print(f"  note: {model} returned nothing; small models need the schema "
+              f"and a short prompt to stay on task", file=sys.stderr)
+        return []
+
+    out = []
+    for c in data.get("candidates", []):
+        if not isinstance(c, dict) or not c.get("action"):
+            continue
+        try:
+            conf = float(c.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            conf = 0.5
+        out.append(
+            Candidate(
+                id=make_id(c["action"], c.get("evidence", "")),
+                action=str(c["action"])[:200],
+                kind=c.get("kind") if c.get("kind") in
+                     ("commitment", "request", "deadline", "task") else "task",
+                evidence=str(c.get("evidence", ""))[:300],
+                source=entry.get("source", "?"),
+                app=(entry.get("source") or "?").split("—")[0].strip(),
+                iso=entry.get("iso", ""),
+                backend="local",
+                confidence=max(0.0, min(1.0, conf)),
+                when=c.get("when") if isinstance(c.get("when"), str) else None,
+            )
+        )
+    return out
+
+
 def pick_backend(requested: str) -> str:
     if requested != "auto":
         return requested
+    # Local first when it's there: same job, nothing leaves the machine.
+    if ollama_available():
+        return "local"
     if os.environ.get("ANTHROPIC_API_KEY") or (
         Path.home() / ".config/anthropic/credentials"
     ).exists():
@@ -661,6 +804,9 @@ def learn() -> dict:
     return weights
 
 
+EXTRACTORS = {"rules": extract_rules, "claude": extract_claude, "local": extract_local}
+
+
 # ------------------------------------------------------------- pipeline ------
 
 THRESH_FIRE = 0.55  # >= interrupt with a card
@@ -716,7 +862,7 @@ def run_once(backend: str, verbose: bool = True) -> list[Candidate]:
     seen = set(state["seen"])
     seen_keys = [frozenset(k) for k in state.get("keys", [])]
     entries = new_entries(state)
-    extractor = extract_claude if backend == "claude" else extract_rules
+    extractor = EXTRACTORS.get(backend, extract_rules)
 
     fired, gated_total, kept_lines = [], 0, 0
     for entry in entries:
@@ -803,7 +949,8 @@ def main() -> None:
     ap.add_argument("--learn", action="store_true")
     ap.add_argument("--stats", action="store_true")
     ap.add_argument("--interval", type=int, default=30)
-    ap.add_argument("--backend", default="auto", choices=["auto", "rules", "claude"])
+    ap.add_argument("--backend", default="auto",
+                    choices=["auto", "rules", "claude", "local"])
     args = ap.parse_args()
 
     if args.learn:
@@ -824,7 +971,7 @@ def main() -> None:
             print("  (nothing survived the gate — no extractor call would be made)")
             return
         weights = load_weights()
-        extractor = extract_claude if backend == "claude" else extract_rules
+        extractor = EXTRACTORS.get(backend, extract_rules)
         cands = extractor(lines, {"source": test_source, "iso": datetime.now().isoformat()})
         if not cands:
             print("  (extractor found no candidates)")
