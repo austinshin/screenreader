@@ -30,6 +30,7 @@ local suggestions = require("cr.suggestions")
 local menubar  = require("cr.menubar")
 local voice    = require("cr.voice")
 local keys     = require("cr.keys")
+local hotkeys  = require("cr.hotkeys")
 
 log.append({ event = "cr.loaded", projectDir = projectDir })
 
@@ -44,36 +45,45 @@ screenText.restoreWatch() -- sticky ⌃⌥⌘W toggle survives reloads/reboots
 viewer.restore()          -- sticky ⌃⌥⌘V viewer panel
 suggestions.start()
 suggestions.onChange = menubar.refresh
-voice.restore()           -- sticky ⌃⌥⌘M voice wake phrase ("hey wispr…")
+voice.restore()           -- sticky ⌃⌥⌘M voice wake phrase ("hey screenreader…")
 keys.restore()            -- sticky ⌃⌥⌘K hotkey cheatsheet
 
--- hotkeys (⌃⌥⌘ layer; alt+space stays with the file opener)
--- ⌃⌥⌘N, NOT fn⇧⌘N. Supporting fn means an hs.eventtap, and an eventtap puts a
--- Lua callback in the path of every keystroke on the system. Hammerspoon is
--- single-threaded, and this config blocks that thread routinely — an
--- AppleScript tab query measured at 85ms, window snapshots for OCR, a
--- 25k-file re-index. While it's blocked the tap can't service key events, so
--- macOS delays or drops them (and disables a tap that answers too slowly).
--- The symptom is dropped keystrokes while typing anywhere, which is a far
--- worse bug than an unavailable modifier. Carbon hotkeys cost nothing until
--- pressed, so this stays on the same ⌃⌥⌘ layer as everything else.
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "n", reminders.promptNew)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "t", notifier.test)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "c", menubar.showCurrentContext)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "s", screenText.demo)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "w", screenText.toggleWatch)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "v", viewer.toggle)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "i", suggestions.review)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "m", voice.toggle)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "k", keys.toggle)
+-- Hotkeys: the registry owns the chords, this only says what each one does.
+-- Bindings are user-editable from the dashboard's Settings tab and persist to
+-- data/hotkeys.json; the cheatsheet and menu bar read the same registry, so a
+-- rebind can't leave a stale chord advertised somewhere.
+--
+-- Carbon hotkeys (hs.hotkey) cost nothing until pressed. An hs.eventtap would
+-- allow the fn key but runs a callback on every keystroke on the system, and
+-- on this single-threaded config that meant dropped characters while typing
+-- anywhere. A modifier you can't have is a smaller problem than a keyboard
+-- that doesn't work — so fn is deliberately unsupported.
+hotkeys.handlers = {
+  reminder = reminders.promptNew,
+  voice    = voice.toggle,
+  ocr      = screenText.demo,
+  watch    = screenText.toggleWatch,
+  viewer   = viewer.toggle,
+  review   = suggestions.review,
+  context  = menubar.showCurrentContext,
+  test     = notifier.test,
+  keys     = keys.toggle,
+}
+hotkeys.load()
+hotkeys.apply()
 
 -- global handle for console debugging: hs -c "print(hs.inspect(CR.observer.current))"
 M.config, M.log, M.observer, M.ui, M.notifier, M.menubar = config, log, observer, ui, notifier, menubar
 M.matcher, M.reminders, M.trigger, M.screenText = matcher, reminders, trigger, screenText
 M.viewer, M.suggestions, M.voice, M.keys = viewer, suggestions, voice, keys
+M.hotkeys = hotkeys
 CR = M
 
 print("[cr] Contextual Reminders loaded — project: " .. tostring(projectDir))
-print("[cr] hotkeys: ⌃⌥⌘K cheatsheet · ⌃⌥⌘N reminder · 🎙 \"hey wispr, remind me to …\" (⌃⌥⌘M) · ⌃⌥⌘S OCR · ⌃⌥⌘W watch · ⌃⌥⌘V viewer · ⌃⌥⌘T test · ⌃⌥⌘C context")
+do -- print the live bindings rather than a hand-maintained copy of them
+  local parts = {}
+  for _, b in ipairs(hotkeys.list()) do parts[#parts + 1] = b.chord .. " = " .. b.label end
+  print("[cr] hotkeys: " .. table.concat(parts, " · "))
+end
 
 return M

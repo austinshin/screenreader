@@ -55,11 +55,17 @@ def today(prefix: str) -> Path:
     return LOGS / f"{prefix}-{datetime.now():%Y-%m-%d}.jsonl"
 
 
-def hs(lua: str) -> str:
-    """Ask the running Hammerspoon instance for live state."""
+def hs(lua: str, timeout: float = 4) -> str:
+    """Ask the running Hammerspoon instance for live state.
+
+    `timeout` is a parameter because reads and writes have very different
+    budgets. A status read should give up fast so the page stays responsive;
+    a write that rebinds every hotkey takes longer, and timing it out reports
+    a failure for work that actually succeeded — the worst kind of wrong.
+    """
     try:
         out = subprocess.run(
-            ["hs", "-c", lua], capture_output=True, text=True, timeout=4
+            ["hs", "-c", lua], capture_output=True, text=True, timeout=timeout
         )
         return out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
     except Exception:
@@ -109,6 +115,12 @@ def snapshot() -> dict:
     watching = hs("return tostring(CR.screenText.watching)") == "true"
     voice = hs("return tostring(CR.voice and CR.voice.running)") == "true"
 
+    # keybindings come from the Lua registry, never a copy kept here
+    try:
+        hotkeys = json.loads(hs("return hs.json.encode(CR.hotkeys.list())") or "[]")
+    except json.JSONDecodeError:
+        hotkeys = []
+
     # delivery channels + configuration state, straight from the Lua registry
     try:
         channels_available = json.loads(
@@ -148,6 +160,7 @@ def snapshot() -> dict:
             "notified_total": len(all_delivered),
         },
         "channels_available": channels_available,
+        "hotkeys": hotkeys,
         "notifications": [dict(e, _key=delivered_key(e)) for e in notifications[-25:]],
         "delivered_hidden": len(all_delivered) - len(notifications),
         "training": {
@@ -437,6 +450,18 @@ kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-b
     </details>
   </section>
 
+  <section data-tab="settings" hidden>
+    <h2>Keyboard shortcuts</h2>
+    <div id="hotkeys"></div>
+    <div class="card" style="margin-top:12px">
+      <div class="meta">Click a shortcut, then press the keys you want.
+        Needs at least one of control / option / command — a bare key would fire
+        while you type. The <b>fn</b> key can't be used: supporting it requires
+        watching every keystroke on the system, which drops characters.</div>
+      <div style="margin-top:10px"><button onclick="resetHotkeys()">Reset all to defaults</button></div>
+    </div>
+  </section>
+
   <section data-tab="internals" hidden>
     <div class="stats" id="devstats" style="margin-top:4px"></div>
     <div class="grid2">
@@ -486,6 +511,7 @@ const TABS = [
   {id:'delivered', label:'Delivered', count:d=>d.counts.notified_today},
   {id:'teach',     label:'Teach',     count:d=>d.counts.open},
   {id:'internals', label:'Internals', count:()=>null},
+  {id:'settings',  label:'Settings',  count:()=>null},
 ];
 let tab = localStorage.getItem('cr.tab') || 'reminders';
 
@@ -560,7 +586,7 @@ function renderReminders(list){
   const el = $('rem');
   if(!list.length){
     el.innerHTML = `<div class="card empty">
-      Nothing yet.<br>Say “hey wispr, remind me to …” or press control+option+command+N.</div>`;
+      Nothing yet.<br>Say “hey screenreader, remind me to …” or press control+option+command+N.</div>`;
     return;
   }
 
@@ -664,6 +690,7 @@ async function load(){
 
   const c = d.counts;
   renderTabs(d);
+  renderHotkeys();
 
   // non-default delivery is worth calling out; a plain local card is assumed
   const chPills = ch => (ch && (ch.length > 1 || ch[0] !== 'card'))
@@ -686,7 +713,7 @@ async function load(){
           <button title="Clear this one" onclick="dismissDelivered('${esc(n._key)}')">✕</button>
         </div></div>`).join('')
       : `<div class="card empty">Nothing delivered${d.delivered_hidden?' — '+d.delivered_hidden+' cleared':''}.<br>
-           Try “hey wispr, remind me to stretch in 2 minutes”.</div>`);
+           Try “hey screenreader, remind me to stretch in 2 minutes”.</div>`);
 
   const open = d.suggestions || [];
   queue = open;   // the count now lives in the tab bar, not a heading
@@ -836,6 +863,7 @@ async function train(){
 }
 
 document.addEventListener('keydown', e=>{
+  if(recording) return;   // the recorder owns the keyboard while it's armed
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   if(/^(input|textarea)$/i.test(e.target.tagName)) return;
   // 1-4 jump between views from anywhere
@@ -874,6 +902,67 @@ async function restoreDelivered(){
     headers:{'Content-Type':'application/json'}, body:'{}'});
   load();
 }
+
+// ------------------------------------------------------- hotkey editing ----
+// Capture is a live keydown listener rather than a text field, because typing
+// "control + option + command + N" as text is both tedious and a source of
+// chords that don't exist. Recording ends on the first non-modifier key.
+let recording = null;
+
+function renderHotkeys(){
+  const list = state.hotkeys || [];
+  if(!list.length){
+    $('hotkeys').innerHTML = `<div class="card empty">
+      Hammerspoon isn't reachable, so shortcuts can't be read or changed.</div>`;
+    return;
+  }
+  $('hotkeys').innerHTML = list.map(h=>`
+    <div class="card"><div class="row">
+      <div class="grow">
+        <div class="act">${esc(h.label)}</div>
+        <div class="meta">${recording===h.id
+          ? '<span style="color:var(--accent)">press the keys now… (esc to cancel)</span>'
+          : esc(h.chord) + (h.isDefault ? '' : ` · default was ${esc(h.default)}`)}</div>
+      </div>
+      ${recording===h.id
+        ? `<button onclick="stopRecording()">Cancel</button>`
+        : `<button onclick="record('${esc(h.id)}')">Change</button>`}
+      ${h.isDefault ? '' : `<button onclick="resetHotkeys('${esc(h.id)}')">Reset</button>`}
+    </div></div>`).join('')
+    + `<div id="hkErr" class="meta" style="color:var(--bad);padding:4px 4px 0"></div>`;
+}
+
+function record(id){ recording = id; renderHotkeys(); }
+function stopRecording(){ recording = null; renderHotkeys(); }
+
+async function resetHotkeys(id){
+  await fetch('/api/hotkey/reset',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(id?{id}:{})});
+  load();
+}
+
+document.addEventListener('keydown', async e=>{
+  if(!recording) return;
+  e.preventDefault(); e.stopPropagation();
+  if(e.key === 'Escape'){ stopRecording(); return; }
+  // wait for a real key — a chord is not finished while only modifiers are down
+  if(['Meta','Control','Alt','Shift'].includes(e.key)) return;
+  const mods = [];
+  if(e.ctrlKey)  mods.push('ctrl');
+  if(e.altKey)   mods.push('alt');
+  if(e.metaKey)  mods.push('cmd');
+  if(e.shiftKey) mods.push('shift');
+  const id = recording;
+  recording = null;
+  const r = await (await fetch('/api/hotkey',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id, mods, key:e.key.toLowerCase()})})).json();
+  await load();
+  if(!r.ok){
+    const el = $('hkErr');
+    if(el) el.textContent = "Couldn't set that: " + (r.error || 'rejected');
+  }
+}, true);
 
 async function judge(id, value){
   const el = $('c-'+id);
@@ -922,6 +1011,34 @@ class Handler(BaseHTTPRequestHandler):
             if cand:
                 write_feedback(cand, payload.get("value", "dismiss"))
             self._send(200, json.dumps({"ok": bool(cand)}).encode(), "application/json")
+
+        elif path == "/api/hotkey":
+            # Validation lives in Lua with the binder, not here: only it knows
+            # what macOS will actually accept and what's already taken.
+            hid = str(payload.get("id", ""))
+            key = str(payload.get("key", "")).lower()
+            mods = [m for m in payload.get("mods", [])
+                    if m in ("ctrl", "alt", "cmd", "shift")]
+            if not hid.isalpha() or len(key) != 1 or not key.isalnum():
+                self._send(200, json.dumps({"ok": False, "error": "invalid key"}).encode(),
+                           "application/json")
+                return
+            lua = "local ok, err = CR.hotkeys.set('%s', {%s}, '%s'); return hs.json.encode({ok=ok, err=err})" % (
+                hid, ",".join(f"'{m}'" for m in mods), key)
+            try:
+                res = json.loads(hs(lua, timeout=15) or '{"ok":false}')
+            except json.JSONDecodeError:
+                res = {"ok": False, "err": "Hammerspoon unreachable"}
+            self._send(200, json.dumps({"ok": bool(res.get("ok")),
+                                        "error": res.get("err")}).encode(),
+                       "application/json")
+
+        elif path == "/api/hotkey/reset":
+            hid = str(payload.get("id", ""))
+            lua = ("CR.hotkeys.reset('%s'); return 'ok'" % hid) if hid.isalpha() \
+                else "CR.hotkeys.reset(); return 'ok'"
+            ok = hs(lua, timeout=15) == "ok"
+            self._send(200, json.dumps({"ok": ok}).encode(), "application/json")
 
         elif path == "/api/delivered/dismiss":
             key = str(payload.get("key", ""))

@@ -57,7 +57,7 @@ local M = {
     margin   = 16,
   },
 
-  -- voice wake phrase ("hey wispr, remind me to …" — sticky ⌃⌥⌘M toggle)
+  -- voice wake phrase ("hey screenreader, remind me to …" — sticky ⌃⌥⌘M toggle)
   voice = {
     binary          = "/opt/homebrew/bin/hear",
     -- Utterance must stop changing this long before firing. 1.5s fired

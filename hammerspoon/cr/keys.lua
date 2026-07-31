@@ -92,39 +92,43 @@ local function palette()
   }
 end
 
--- Chords are spelled out, not drawn as glyphs. ⌃⌥⌘ is unreadable unless you
--- already know it, which defeats the point of a panel you open *because* you
--- forgot. Every one of these is the same three modifiers plus a letter, so the
--- prefix is stated once at the top and each row only carries its letter.
-local MODS = "control + option + command"
-
+-- Chords come from cr.hotkeys, never from a copy kept here. They are
+-- user-editable now, so a hardcoded list would start printing chords that no
+-- longer work — a cheatsheet that lies is worse than none.
+--
 -- Built at render time rather than declared once, because the state column is
 -- half the value. `state` is nil (nothing), true/false (dot), or a string.
 local function rows()
   local ok, screenText = pcall(require, "cr.screen_text")
   local okV, voice = pcall(require, "cr.voice")
   local okS, suggestions = pcall(require, "cr.suggestions")
+  local okH, hotkeys = pcall(require, "cr.hotkeys")
   local watching = ok and screenText.watching or false
   local listening = okV and voice.running or false
   local queued = okS and #suggestions.inbox or 0
 
-  return {
-    { label = "New reminder",            chord = MODS .. " + N" },
-    { label = "Say it instead",          chord = "\"hey wispr, remind me to…\"",
-      state = listening },
-    { label = "Voice listening on/off",  chord = MODS .. " + M", state = listening },
-    { sep = true },
-    { label = "Read this window once",   chord = MODS .. " + S" },
-    { label = "Watch mode (auto-read)",  chord = MODS .. " + W", state = watching },
-    { label = "See what it read",        chord = MODS .. " + V" },
-    { sep = true },
-    { label = "Review suggestions",      chord = MODS .. " + I",
-      state = queued > 0 and tostring(queued) or nil },
-    { label = "Where am I right now",    chord = MODS .. " + C" },
-    { label = "Send a test card",        chord = MODS .. " + T" },
-    { sep = true },
-    { label = "Hide this panel",         chord = MODS .. " + K" },
+  local state = {
+    voice = listening,
+    watch = watching,
+    review = queued > 0 and tostring(queued) or nil,
   }
+  local after = { voice = true, viewer = true }  -- separator follows these
+
+  local out = {}
+  if not okH then
+    return { { label = "hotkeys unavailable", chord = "check the Hammerspoon console" } }
+  end
+  -- the spoken path has no chord, so it is stated rather than bound
+  local list = hotkeys.list()
+  for i, b in ipairs(list) do
+    if b.id == "voice" then
+      out[#out + 1] = { label = "Say it instead",
+                        chord = '"hey screenreader, remind me to…"', state = listening }
+    end
+    out[#out + 1] = { label = b.label, chord = b.chord, state = state[b.id] }
+    if after[b.id] and i < #list then out[#out + 1] = { sep = true } end
+  end
+  return out
 end
 
 local function render()

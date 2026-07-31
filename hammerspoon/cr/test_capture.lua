@@ -23,9 +23,9 @@ local M = {}
 local CASES = {
   {
     "one command, one reminder",
-    { "hey wispr remind me to",
-      "hey wispr remind me to water",
-      "hey wispr remind me to water the plants" },
+    { "hey screen reader remind me to",
+      "hey screen reader remind me to water",
+      "hey screen reader remind me to water the plants" },
     { "water the plants" },
   },
   {
@@ -35,14 +35,14 @@ local CASES = {
     -- Reconstructed: the stored reminders are verbatim, but the wake word that
     -- must have preceded them is inferred, because the transcript log was
     -- being truncated on every start (fixed — it now keeps a rolling tail).
-    { "hey wispr do remind me to create a grocery list in like five minutes ok because",
-      "hey wispr do remind me to create a grocery list in like five minutes ok because it s because we re on the call right now it would trigger and it would show and it would create a reminder what are you using for transcription you just have",
-      "hey wispr do remind me to create a grocery list in like five minutes because it s because we re on the call right now it would trigger and it would show and then it would create a reminder what are you using for transcription you just have like something" },
+    { "hey screen reader do remind me to create a grocery list in like five minutes ok because",
+      "hey screen reader do remind me to create a grocery list in like five minutes ok because it s because we re on the call right now it would trigger and it would show and it would create a reminder what are you using for transcription you just have",
+      "hey screen reader do remind me to create a grocery list in like five minutes because it s because we re on the call right now it would trigger and it would show and then it would create a reminder what are you using for transcription you just have like something" },
     { "create a grocery list in like five minutes" },
   },
   {
     "utterance split across two lines keeps its time",
-    { "it whisper remind me to send a video later in", "like 12 PM" },
+    { "it screen reader remind me to send a video later in", "like 12 PM" },
     { "send a video later at 12 pm" },
   },
   {
@@ -52,7 +52,7 @@ local CASES = {
   },
   {
     "wake word without a command is not a reminder",
-    { "have you tried wispr flow yet" },
+    { "have you tried a screen reader yet" },
     nil,
   },
 }

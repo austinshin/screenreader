@@ -15,7 +15,7 @@ The Hammerspoon side (observer, triggers, hotkeys, voice) loads via
 
 | How | Trigger |
 |---|---|
-| 🎙 voice | *"hey wispr, remind me to water the plants in 5 minutes"* (toggle ⌃⌥⌘M) |
+| 🎙 voice | *"hey screenreader, remind me to water the plants in 5 minutes"* (toggle ⌃⌥⌘M) |
 | ⌨️ hotkey | **fn⇧⌘N** — type it; time phrases understood |
 | 💡 suggestions | accept from the menu-bar inbox or the dashboard |
 

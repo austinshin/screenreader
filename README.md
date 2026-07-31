@@ -21,7 +21,7 @@ No clock. The trigger is *"you finished the thing you were looking at."*
 | | |
 |---|---|
 | ⌨️ **Hotkey** | `control+option+command+N`, type it |
-| 🎙 **Voice** | *"hey wispr, remind me to reply to this once I'm done here"* |
+| 🎙 **Voice** | *"hey screenreader, remind me to reply to this once I'm done here"* |
 | 💡 **Screen inference** | off by default — see [The experiment](#the-experiment-screen-inference) |
 
 The brief's own phrasings work as written, with the condition split from the task:

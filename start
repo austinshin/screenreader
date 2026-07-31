@@ -91,7 +91,7 @@ case "${1:-up}" in
                     || echo "  dashboard:   down"
     alive "$EX_PID" && echo "  extractor:   up (pid $(cat "$EX_PID"))" \
                     || echo "  extractor:   down"
-    pgrep -x hear >/dev/null && echo '  voice:       on — "hey wispr, remind me to …"' \
+    pgrep -x hear >/dev/null && echo '  voice:       on — "hey screenreader, remind me to …"' \
                              || echo "  voice:       off (toggle ⌃⌥⌘M)"
     hs -c "return 'ok'" >/dev/null 2>&1 && echo "  hammerspoon: reachable" \
                                         || echo "  hammerspoon: NOT reachable — open Hammerspoon.app"
@@ -103,7 +103,7 @@ case "${1:-up}" in
     start_one dashboard "$UI_PID" "$PY" service/ui.py
     adopt_extractor || start_one extractor "$EX_PID" "$PY" service/extract.py --watch
     hs -c "return 'ok'" >/dev/null 2>&1 || echo "  ⚠ Hammerspoon not reachable — open Hammerspoon.app"
-    pgrep -x hear >/dev/null && echo '  voice: on — try "hey wispr, remind me to stretch in 2 minutes"' \
+    pgrep -x hear >/dev/null && echo '  voice: on — try "hey screenreader, remind me to stretch in 2 minutes"' \
                              || echo "  voice: off — toggle with ⌃⌥⌘M"
     echo
     echo "  dashboard → http://localhost:$PORT"

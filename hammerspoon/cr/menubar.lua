@@ -85,7 +85,7 @@ local function menu()
       fn = screenText.toggleWatch,
     },
     {
-      title = (voice.running and "Stop" or "Start") .. " voice (\"hey wispr…\")   ⌃⌥⌘M",
+      title = (voice.running and "Stop" or "Start") .. " voice (\"hey screenreader…\")   ⌃⌥⌘M",
       fn = voice.toggle,
     },
     {

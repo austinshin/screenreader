@@ -1,4 +1,4 @@
--- cr.voice — wake-phrase voice input: "hey wispr, remind me to <x>".
+-- cr.voice — wake-phrase voice input: "hey screenreader, remind me to <x>".
 --
 -- Continuous on-device speech recognition via the `hear` CLI (a thin wrapper
 -- around Apple's SFSpeechRecognizer; github.com/sveinbjornt/hear).
@@ -23,6 +23,7 @@ local observer = require("cr.observer")
 local reminders = require("cr.reminders")
 local timeparse = require("cr.timeparse")
 local ui = require("cr.notify_ui")
+local listening = require("cr.listening")
 
 local M = { running = false }
 
@@ -34,14 +35,21 @@ local candidate = nil          -- latest parsed reminder text, awaiting settle
 local settleTimer, pollTimer, healthTimer
 local lastFired = { text = "", at = 0 }
 
--- Matching the whole phrase "hey wispr" was too brittle: the recognizer hears
--- the leading "hey" as whatever it likes ("It whisper remind me to…", "A
--- whisper…", "Hay wispr…"), so anchoring on it threw away real commands. Only
--- the distinctive token is matched now, anywhere in the line — the wake word
--- is doing the work, and "hey" was never carrying signal.
+-- Matching the whole phrase was too brittle: the recognizer hears the leading
+-- "hey" as whatever it likes ("It screenreader remind me to…", "A screen
+-- reader…"), so anchoring on it threw away real commands. Only the distinctive
+-- token is matched, anywhere in the line — "hey" never carried signal.
+--
+-- "screenreader" is two dictionary words, so the recognizer almost always
+-- writes it with a space and sometimes swaps one half for a rhyme. Listing the
+-- mishearings is not sloppiness — an exact-match wake word fails silently and
+-- leaves you repeating yourself at a machine that heard something adjacent.
+-- The upside over the old word: two syllables of real English are much harder
+-- to trip by accident than a single odd token.
 local WAKE = {
-  "wispr", "whispr", "whisper", "wisper", "whispers", "wispers",
-  "vesper", "vespr", "whisker", "wesper", "with per", "wis per",
+  "screenreader", "screen reader", "screen readers", "screenreaders",
+  "screen leader", "screen rider", "screen writer", "screenwriter",
+  "scream reader", "green reader", "screen redder", "screen reeder",
 }
 
 -- Words a sentence can end on when the recognizer cuts an utterance early:
@@ -101,8 +109,22 @@ local function norm(s)
   return (s:lower():gsub("%p", " "):gsub("%s+", " "):gsub("^%s", ""))
 end
 
+-- Was the wake word said? Separate from _parse because the HUD has to appear
+-- the moment you're heard — waiting for a complete command means the panel
+-- shows up after you've already finished talking, which is too late to be the
+-- feedback it exists to be.
+function M._wakeAt(line)
+  local t = norm(line)
+  local at
+  for _, w in ipairs(WAKE) do
+    local _, e = t:find(w, 1, true)
+    if e and (not at or e < at) then at = e end
+  end
+  return at
+end
+
 -- Extract the reminder text from one transcript line, or nil.
--- "it whisper remind me to do the laundry" → "do the laundry"
+-- "it screen reader remind me to do the laundry" → "do the laundry"
 function M._parse(line)
   local t = norm(line)
   local wakeEnd
@@ -189,10 +211,11 @@ local function fire(text)
   local chime = hs.sound.getByName("Glass")
   if chime then chime:play() end
   if r then
-    -- r.text has the time phrase stripped; describe() = when · where · how
+    listening.created(r.text, r.dueAt and timeparse.fmtDue(r.dueAt)
+      or ("when you're done with " .. (r.referent and r.referent.label or "this")))
     ui.toast('🎙 "' .. r.text .. '" — ' .. reminders.describe(r), 3.5)
   else
-    ui.toast('🎙 heard "' .. text .. '" — ⚠️ nothing bindable on screen', 3)
+    listening.rejected("couldn't attach that to anything on screen")
   end
 end
 
@@ -208,6 +231,24 @@ end
 -- Feed one transcript line through parse + settle. Exposed for testing.
 function M._ingest(line)
   local text = M._parse(line)
+
+  -- Show what was heard as it arrives. The raw line and the parsed task are
+  -- both displayed because they fail differently: the recognizer can mishear a
+  -- word, or hear it correctly and the parser can misread it, and you can only
+  -- tell which by seeing both.
+  local wake = M._wakeAt(line)
+  if wake then
+    local heard = line:sub(wake + 1):gsub("^%s+", "")
+    if text then
+      local task, due = timeparse.extract(boundCommand(text))
+      listening.capturing(heard, task, due and timeparse.fmtDue(due) or nil)
+    elseif #heard < 3 then
+      listening.listening()
+    else
+      listening.capturing(heard, nil, nil)
+    end
+  end
+
   if not text then
     -- The recognizer ends an utterance wherever it hears a pause, which lands
     -- mid-sentence often enough to matter: "…remind me to send a video later
@@ -320,7 +361,7 @@ function M.start()
     end
   end)
   log.append({ event = "voice.agent_start" })
-  ui.toast('🎙 voice on — "hey wispr, remind me to …"', 2)
+  ui.toast('🎙 voice on — "hey screenreader, remind me to …"', 2)
 end
 
 function M.stop()
