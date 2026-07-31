@@ -121,7 +121,9 @@ def snapshot() -> dict:
                                "desc": "on-screen card on this Mac (default)"}]
 
     # everything that was actually delivered (any channel), newest last
-    notifications = [e for e in events if e.get("event") == "notify.dispatch"]
+    dismissed = load_dismissed()
+    all_delivered = [e for e in events if e.get("event") == "notify.dispatch"]
+    notifications = [e for e in all_delivered if delivered_key(e) not in dismissed]
 
     # candidates not yet judged
     judged_ids = {f.get("id") for f in feedback}
@@ -143,9 +145,11 @@ def snapshot() -> dict:
             "labels": len(judged),
             "precision": round(100 * accepted / len(judged)) if judged else None,
             "notified_today": len(notifications),
+            "notified_total": len(all_delivered),
         },
         "channels_available": channels_available,
-        "notifications": notifications[-25:],
+        "notifications": [dict(e, _key=delivered_key(e)) for e in notifications[-25:]],
+        "delivered_hidden": len(all_delivered) - len(notifications),
         "training": {
             "labels": len(judged),
             "accepts": accepted,
@@ -203,6 +207,34 @@ def find_candidate(cid: str) -> dict | None:
         if c.get("id") == cid:
             return c
     return None
+
+
+# The event log is the record of what actually happened; clearing a row from
+# the Delivered list is a display preference, not a correction of history. So
+# dismissals live in their own file and are applied as a filter — the audit
+# trail stays intact and "clear" can never destroy evidence of a delivery.
+DISMISSED = DATA / "delivered_dismissed.json"
+
+
+def delivered_key(e: dict) -> str:
+    """Stable id for one delivery. The event's `id` is the *reminder* id, which
+    repeats when a reminder fires twice, so the timestamp is part of the key."""
+    return f"{e.get('iso', '')}|{e.get('id') or e.get('title', '')}"
+
+
+def load_dismissed() -> set[str]:
+    if not DISMISSED.exists():
+        return set()
+    try:
+        return set(json.loads(DISMISSED.read_text()))
+    except (json.JSONDecodeError, TypeError):
+        return set()
+
+
+def save_dismissed(keys: set[str]) -> None:
+    DATA.mkdir(exist_ok=True)
+    # bounded: this is a hide-list, not a second copy of the log
+    DISMISSED.write_text(json.dumps(sorted(keys)[-2000:]))
 
 
 def undo_last_feedback() -> dict | None:
@@ -636,16 +668,25 @@ async function load(){
   // non-default delivery is worth calling out; a plain local card is assumed
   const chPills = ch => (ch && (ch.length > 1 || ch[0] !== 'card'))
     ? ch.map(x=>`<span class="pill">📣 ${esc(x)}</span>`).join('') : '';
-  $('notifs').innerHTML = d.notifications.length
-    ? d.notifications.slice(-10).reverse().map(n=>`<div class="card"><div class="row">
-        <div class="grow">
-          <div class="act">${esc(n.body||n.title||'')}</div>
-          <div class="meta">${n.referent?'📍 '+esc(n.referent):''}</div>
-        </div>
-        ${chPills(n.channels)}
-        <span class="when">${esc(fmtAgo(n.iso))}</span>
-      </div></div>`).join('')
-    : `<div class="card empty">Nothing delivered yet — try “hey wispr, remind me to stretch in 2 minutes”.</div>`;
+  const nots = d.notifications || [];
+  $('notifs').innerHTML = (nots.length
+    ? `<div class="row" style="margin:0 2px 10px">
+         <div class="grow meta">${nots.length} shown${d.delivered_hidden?` · ${d.delivered_hidden} cleared`:''}</div>
+         <button class="n" onclick="clearDelivered()">Clear all</button>
+         ${d.delivered_hidden?`<button onclick="restoreDelivered()">Restore cleared</button>`:''}
+       </div>` : '')
+    + (nots.length
+      ? nots.slice(-12).reverse().map(n=>`<div class="card" id="n-${esc(n._key)}"><div class="row">
+          <div class="grow">
+            <div class="act">${esc(n.body||n.title||'')}</div>
+            <div class="meta">${n.referent?'from '+esc(n.referent):''}</div>
+          </div>
+          ${chPills(n.channels)}
+          <span class="when">${esc(fmtAgo(n.iso))}</span>
+          <button title="Clear this one" onclick="dismissDelivered('${esc(n._key)}')">✕</button>
+        </div></div>`).join('')
+      : `<div class="card empty">Nothing delivered${d.delivered_hidden?' — '+d.delivered_hidden+' cleared':''}.<br>
+           Try “hey wispr, remind me to stretch in 2 minutes”.</div>`);
 
   const open = d.suggestions || [];
   queue = open;   // the count now lives in the tab bar, not a heading
@@ -811,6 +852,29 @@ document.addEventListener('keydown', e=>{
   e.preventDefault();
 });
 
+// Clearing hides a row; it never edits the event log, which is the record of
+// what was actually delivered. "Restore cleared" is therefore always possible.
+async function dismissDelivered(key){
+  const el = $('n-'+key); if(el) el.style.opacity = .3;
+  await fetch('/api/delivered/dismiss',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({key})});
+  load();
+}
+
+async function clearDelivered(){
+  // only what's on screen — a delivery that lands mid-click shouldn't vanish unseen
+  const keys = (state.notifications||[]).map(n=>n._key);
+  await fetch('/api/delivered/clear',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({keys})});
+  load();
+}
+
+async function restoreDelivered(){
+  await fetch('/api/delivered/restore',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:'{}'});
+  load();
+}
+
 async function judge(id, value){
   const el = $('c-'+id);
   if(el){ el.style.opacity=.35; }
@@ -858,6 +922,29 @@ class Handler(BaseHTTPRequestHandler):
             if cand:
                 write_feedback(cand, payload.get("value", "dismiss"))
             self._send(200, json.dumps({"ok": bool(cand)}).encode(), "application/json")
+
+        elif path == "/api/delivered/dismiss":
+            key = str(payload.get("key", ""))
+            keys = load_dismissed()
+            if key:
+                keys.add(key)
+                save_dismissed(keys)
+            self._send(200, json.dumps({"ok": bool(key)}).encode(), "application/json")
+
+        elif path == "/api/delivered/clear":
+            # hide everything currently visible, not everything ever — a row
+            # that arrives while you're reading shouldn't vanish unseen
+            keys = load_dismissed()
+            for k in payload.get("keys", []):
+                if isinstance(k, str):
+                    keys.add(k)
+            save_dismissed(keys)
+            self._send(200, json.dumps({"ok": True, "hidden": len(keys)}).encode(),
+                       "application/json")
+
+        elif path == "/api/delivered/restore":
+            save_dismissed(set())
+            self._send(200, b'{"ok":true}', "application/json")
 
         elif path == "/api/learn":
             try:

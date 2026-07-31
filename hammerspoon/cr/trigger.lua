@@ -18,6 +18,7 @@ local matcher = require("cr.matcher")
 local reminders = require("cr.reminders")
 local notifier = require("cr.notifier")
 local observer = require("cr.observer")
+local tier = require("cr.tier")
 
 local M = { running = false }
 
@@ -100,8 +101,34 @@ end
 
 local function fire(r, snap, gate)
   reminders.setState(r, "fired", gate)
-  log.append({ event = "trigger.fired", id = r.id, text = r.text, gate = gate })
-  local channels = notifier.notify(cardFor(r, gate == "time"), { channels = r.channels })
+  log.append({ event = "trigger.fired", id = r.id, text = r.text, gate = gate,
+               tier = r.tier })
+
+  -- Ambient never gets a card. This is the whole point of the tier: something
+  -- you asked to "keep an eye on" should be findable, not interruptive, and a
+  -- card that must be dismissed is an interruption whatever its contents say.
+  -- It still fires and still lands in the dashboard and menu bar.
+  if (r.tier or tier.UPCOMING) == tier.AMBIENT then
+    log.append({ event = "trigger.silent", id = r.id, reason = "ambient tier" })
+    require("cr.why").note("reminder surfaced quietly", r.text, {
+      { "why now", whyNow(r, snap, gate) },
+      { "attention", "ambient — no card, by design. It's in the dashboard and menu bar." },
+    })
+    return
+  end
+  local payload = cardFor(r, gate == "time")
+  local chans = r.channels
+  if (r.tier or 2) == tier.CRITICAL then
+    payload.urgency = "warn"
+    payload.icon = "🚨"
+    -- critical reaches you wherever you are, not only where it fired
+    chans = { "card", "system" }
+    for _, c in ipairs(r.channels or {}) do
+      if c ~= "card" and c ~= "system" then chans[#chans + 1] = c end
+    end
+    local s_ = hs.sound.getByName("Sosumi"); if s_ then s_:play() end
+  end
+  local channels = notifier.notify(payload, { channels = chans })
   require("cr.why").note("reminder fired", r.text, {
     { "why now", whyNow(r, snap, gate) },
     { "set", os.date("%I:%M %p", r.createdAt or os.time()):gsub("^0", "")
@@ -125,6 +152,46 @@ function M.restoreFired()
     end
   end
   if n > 0 then log.append({ event = "trigger.restored", count = n }) end
+end
+
+-- Tier is a property of the reminder *right now*, so it is recomputed rather
+-- than remembered. "Take out the trash" is ambient in the afternoon, upcoming
+-- in the evening, and critical the night before collection — nothing about the
+-- reminder changed except how close the consequence got.
+local function retier(r, snap)
+  local from = r.tier or tier.UPCOMING
+  local to, why = from, nil
+
+  if r.dueAt then
+    local left = r.dueAt - os.time()
+    if left <= 600 and from > tier.CRITICAL then
+      to, why = tier.CRITICAL, "under ten minutes away"
+    elseif left <= 3600 and from > tier.UPCOMING then
+      to, why = tier.UPCOMING, "within the hour"
+    end
+  elseif r.referent and from == tier.AMBIENT and matcher.matches(r.referent, snap) then
+    -- something you were only tracking is now in front of you
+    to, why = tier.INCONTEXT, "the thing it's about is on screen now"
+  elseif from == tier.INCONTEXT and r.state == "pending"
+      and os.time() - (r.createdAt or os.time()) > 86400 then
+    -- a context that hasn't come back in a day isn't going to interrupt well
+    to, why = tier.AMBIENT, "its context hasn't appeared in a day"
+  end
+
+  if to ~= from then
+    r.tier, r.tierWhy = to, why
+    r.tierHistory = r.tierHistory or {}
+    r.tierHistory[#r.tierHistory + 1] = { t = os.time(), from = from, to = to, why = why }
+    reminders.persist()
+    log.append({ event = "tier.moved", id = r.id, from = from, to = to, why = why })
+    require("cr.why").note(
+      to < from and "reminder got louder" or "reminder got quieter", r.text, {
+        { "moved", string.format("%s → %s", tier.LABEL[from].name, tier.LABEL[to].name) },
+        { "because", why },
+        { "now", tier.LABEL[to].note },
+      })
+    if M.onStateChange then pcall(M.onStateChange) end
+  end
 end
 
 -- Timed reminders bypass the FSM entirely: they fire on the clock, wherever
@@ -177,7 +244,12 @@ local function step(r, snap)
       reminders.setState(r, "armed", "returned")
     else
       local gate
-      if snap.reason == "app-switch" or snap.reason == "wake" then
+      if tier.bypassesSeamGate(r.tier) then
+        -- The one tier allowed to interrupt mid-focus. Everything else waiting
+        -- for a natural break is the promise that makes this tolerable to
+        -- leave running; critical is the stated exception, not an oversight.
+        gate = "critical"
+      elseif snap.reason == "app-switch" or snap.reason == "wake" then
         gate = snap.reason
       elseif os.time() - (r.readyAt or 0) >= cfg().maxReadyWait then
         gate = "max-wait"
@@ -197,6 +269,7 @@ end
 -- snapshots through the FSM without waiting for wall-clock time.
 function M.tick(snap)
   for _, r in ipairs(reminders.active()) do
+    pcall(retier, r, snap)
     local before = r.state
     local ok, err = pcall(step, r, snap)
     if not ok then
