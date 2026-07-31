@@ -31,40 +31,65 @@ end
 local function fire(r, snap, gate)
   reminders.setState(r, "fired", gate)
   log.append({ event = "trigger.fired", id = r.id, text = r.text, gate = gate })
+  local timed = gate == "time"
+  local actions = {
+    {
+      label = "Done",
+      fn = function()
+        reminders.setState(r, "done", "user")
+        log.append({ event = "feedback", value = "done", id = r.id })
+      end,
+    },
+    {
+      label = "Snooze",
+      fn = function()
+        if r.dueAt then
+          -- timed reminder: push the clock, back onto the schedule
+          r.dueAt = os.time() + cfg().snoozeMinutes * 60
+          reminders.setState(r, "scheduled", "snoozed")
+        else
+          r.snoozeUntil = os.time() + cfg().snoozeMinutes * 60
+          reminders.setState(r, "snoozed")
+        end
+        log.append({ event = "feedback", value = "snooze", id = r.id })
+      end,
+    },
+  }
+  if not timed then
+    actions[#actions + 1] = {
+      label = "Too early",
+      fn = function()
+        -- the false-positive button: user is NOT done with the thing.
+        -- back to PENDING — re-arms on next sighting, full cycle again.
+        r.absent = 0
+        reminders.setState(r, "pending", "too_early")
+        log.append({ event = "feedback", value = "too_early", id = r.id })
+      end,
+    }
+  end
   notifier.notify({
     title = "Reminder",
     body = r.text,
     icon = "⏰",
     urgency = "info",
     meta = { id = r.id, referent = r.referent and r.referent.label },
-    actions = {
-      {
-        label = "Done",
-        fn = function()
-          reminders.setState(r, "done", "user")
-          log.append({ event = "feedback", value = "done", id = r.id })
-        end,
-      },
-      {
-        label = "Snooze",
-        fn = function()
-          r.snoozeUntil = os.time() + cfg().snoozeMinutes * 60
-          reminders.setState(r, "snoozed")
-          log.append({ event = "feedback", value = "snooze", id = r.id })
-        end,
-      },
-      {
-        label = "Too early",
-        fn = function()
-          -- the false-positive button: user is NOT done with the thing.
-          -- back to PENDING — re-arms on next sighting, full cycle again.
-          r.absent = 0
-          reminders.setState(r, "pending", "too_early")
-          log.append({ event = "feedback", value = "too_early", id = r.id })
-        end,
-      },
-    },
-  })
+    actions = actions,
+  }, { channels = r.channels }) -- nil falls back to config.defaultChannels
+end
+
+-- Timed reminders bypass the FSM entirely: they fire on the clock, wherever
+-- the user is. Checked every second for demo-friendly precision.
+local function checkDue()
+  local now = os.time()
+  for _, r in ipairs(reminders.active()) do
+    if r.state == "scheduled" and r.dueAt and now >= r.dueAt then
+      local ok, err = pcall(fire, r, observer.current or {}, "time")
+      if not ok then
+        log.append({ event = "trigger.error", id = r.id, error = tostring(err) })
+      end
+      if M.onStateChange then pcall(M.onStateChange) end
+    end
+  end
 end
 
 local function step(r, snap)
@@ -131,10 +156,13 @@ function M.tick(snap)
   end
 end
 
+local dueTimer
+
 function M.start()
   if M.running then return end
   M.running = true
   observer.subscribeTick(M.tick)
+  dueTimer = hs.timer.doEvery(1, checkDue)
   log.append({ event = "trigger.start" })
 end
 

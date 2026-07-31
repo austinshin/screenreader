@@ -207,12 +207,55 @@ class Candidate:
     when: str | None = None  # temporal hint, verbatim, if any
 
 
-def make_id(action: str) -> str:
-    return "c" + hashlib.sha1(normalize(action).encode()).hexdigest()[:12]
-
-
 def normalize(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", "", s.lower()).strip()
+
+
+def make_id(action: str, evidence: str = "") -> str:
+    """Identity for dedupe.
+
+    Keyed on the *evidence* (the verbatim source line) rather than the
+    generated action. This matters more than it looks: an LLM paraphrases the
+    same task differently on every pass — "Create the day 1 updates video and
+    send it to Shin" / "Create and send the day 1 updates video" / "Record one
+    or two more update videos" were all one email, read across 30 captures.
+    Hashing the action let every rephrasing through as a "new" candidate.
+    The source line is stable, so hashing it collapses them.
+    """
+    basis = normalize(evidence) or normalize(action)
+    return "c" + hashlib.sha1(basis.encode()).hexdigest()[:12]
+
+
+STOP = {
+    "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "at", "by",
+    "with", "your", "you", "it", "this", "that", "then", "once", "after",
+    "before", "is", "are", "be", "will", "send", "create", "make", "get",
+}
+
+
+def action_key(action: str) -> frozenset:
+    """Content words, for catching paraphrases the evidence hash misses.
+
+    OCR is not stable either: the same line re-read can differ by a character
+    ("GitHub paad's"), which changes the evidence hash. Comparing content-word
+    sets survives both LLM rephrasing and OCR jitter.
+    """
+    words = [w for w in normalize(action).split() if w not in STOP and len(w) > 2]
+    return frozenset(words)
+
+
+def too_similar(key: frozenset, seen_keys: list[frozenset], thresh: float = 0.6) -> bool:
+    """Jaccard overlap against everything already surfaced."""
+    if not key:
+        return False
+    for other in seen_keys:
+        if not other:
+            continue
+        inter = len(key & other)
+        union = len(key | other)
+        if union and inter / union >= thresh:
+            return True
+    return False
 
 
 # ------------------------------------------------------------ extractors -----
@@ -236,7 +279,7 @@ def extract_rules(lines: list[str], entry: dict) -> list[Candidate]:
         explicit = bool(re.search(r"\bremind me|note to self|todo\b", line, re.I))
         out.append(
             Candidate(
-                id=make_id(line),
+                id=make_id(line, line),
                 action=line,
                 kind=kind,
                 evidence=line,
@@ -345,7 +388,7 @@ def extract_claude(lines: list[str], entry: dict) -> list[Candidate]:
     for c in data.get("candidates", []):
         out.append(
             Candidate(
-                id=make_id(c["action"]),
+                id=make_id(c["action"], c.get("evidence", "")),
                 action=c["action"],
                 kind=c["kind"],
                 evidence=c.get("evidence", ""),
@@ -485,12 +528,13 @@ def state_path() -> Path:
 def load_state() -> dict:
     if state_path().exists():
         return json.loads(state_path().read_text())
-    return {"cursor": {}, "seen": []}
+    return {"cursor": {}, "seen": [], "keys": []}
 
 
 def save_state(st: dict) -> None:
     DATA.mkdir(exist_ok=True)
     st["seen"] = st["seen"][-2000:]
+    st["keys"] = st.get("keys", [])[-400:]
     state_path().write_text(json.dumps(st))
 
 
@@ -522,6 +566,7 @@ def run_once(backend: str, verbose: bool = True) -> list[Candidate]:
     state = load_state()
     weights = load_weights()
     seen = set(state["seen"])
+    seen_keys = [frozenset(k) for k in state.get("keys", [])]
     entries = new_entries(state)
     extractor = extract_claude if backend == "claude" else extract_rules
 
@@ -546,6 +591,11 @@ def run_once(backend: str, verbose: bool = True) -> list[Candidate]:
             c.score = score(c, weights)
             if c.score < THRESH_INBOX:
                 continue
+            key = action_key(c.action)
+            if too_similar(key, seen_keys):
+                continue  # a rephrasing of something already surfaced
+            seen_keys.append(key)
+            state.setdefault("keys", []).append(sorted(key))
             seen.add(c.id)
             state["seen"].append(c.id)
             fired.append(c)

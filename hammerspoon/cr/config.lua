@@ -52,6 +52,13 @@ local M = {
     margin   = 16,
   },
 
+  -- voice wake phrase ("hey wispr, remind me to …" — sticky ⌃⌥⌘M toggle)
+  voice = {
+    binary          = "/opt/homebrew/bin/hear",
+    settleSeconds   = 1.5, -- utterance must stop changing this long before firing
+    cooldownSeconds = 8,   -- ignore repeats/extensions of the last capture
+  },
+
   -- browsers we can ask for the active tab (bundle id → applescript dialect)
   browsers = {
     ["com.google.Chrome"]          = "chrome",

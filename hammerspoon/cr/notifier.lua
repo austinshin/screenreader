@@ -126,7 +126,12 @@ function M.notify(payload, opts)
     if not seen[n] then seen[n] = true; list[#list + 1] = n end
   end
 
-  log.append({ event = "notify.dispatch", title = payload.title, channels = list })
+  log.append({
+    event = "notify.dispatch", title = payload.title, channels = list,
+    body = (payload.body or ""):sub(1, 200), icon = payload.icon,
+    id = payload.meta and payload.meta.id,
+    referent = payload.meta and payload.meta.referent,
+  })
   for _, n in ipairs(list) do
     local channel = M.channels[n]
     if channel then
@@ -136,6 +141,19 @@ function M.notify(payload, opts)
     end
   end
   return list
+end
+
+-- The ways a notification can reach the user, with configuration state —
+-- the web UI renders this as the per-reminder channel picker.
+function M.available()
+  return {
+    { name = "card",    configured = true, desc = "on-screen card on this Mac (default)" },
+    { name = "system",  configured = true, desc = "macOS Notification Center" },
+    { name = "discord", configured = discordWebhook() ~= nil, desc = "Discord webhook" },
+    { name = "slack",   configured = M.secrets.slackWebhook ~= nil, desc = "Slack webhook" },
+    { name = "webhook", configured = type(M.secrets.webhooks) == "table" and #M.secrets.webhooks > 0,
+      desc = "generic JSON POST (secrets.lua)" },
+  }
 end
 
 -- fires a sample card through the full pipeline; feedback buttons write to the log

@@ -2,6 +2,29 @@
 
 Everything operational: starting, verifying, using, configuring, debugging.
 
+## Quick start
+
+```sh
+./start          # dashboard (http://localhost:8765) + extraction service
+./start status   # what's running
+./start stop
+```
+
+The Hammerspoon side (observer, triggers, hotkeys, voice) loads via
+`~/.hammerspoon/init.lua` — already wired. Three ways to create a reminder:
+
+| How | Trigger |
+|---|---|
+| 🎙 voice | *"hey wispr, remind me to water the plants in 5 minutes"* (toggle ⌃⌥⌘M) |
+| ⌨️ hotkey | **fn⇧⌘N** — type it; time phrases understood |
+| 💡 suggestions | accept from the menu-bar inbox or the dashboard |
+
+Time phrases (*in 5 minutes*, *at 3pm*, *tomorrow at 9*) fire on the clock.
+Without one, the reminder is contextual — it fires when you're done with the
+thing that was on screen. Delivery defaults to a card on this Mac; each
+reminder's channels (card / Notification Center / Discord / Slack / webhook)
+are editable from the dashboard's Reminders list.
+
 ## Prerequisites
 
 | Thing | Why | Check |

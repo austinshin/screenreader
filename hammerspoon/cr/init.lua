@@ -28,6 +28,7 @@ local screenText = require("cr.screen_text")
 local viewer   = require("cr.viewer")
 local suggestions = require("cr.suggestions")
 local menubar  = require("cr.menubar")
+local voice    = require("cr.voice")
 
 log.append({ event = "cr.loaded", projectDir = projectDir })
 
@@ -41,23 +42,36 @@ screenText.restoreWatch() -- sticky ⌃⌥⌘W toggle survives reloads/reboots
 viewer.restore()          -- sticky ⌃⌥⌘V viewer panel
 suggestions.start()
 suggestions.onChange = menubar.refresh
+voice.restore()           -- sticky ⌃⌥⌘M voice wake phrase ("hey wispr…")
 
 -- hotkeys (⌃⌥⌘ layer; alt+space stays with the file opener)
-hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "r", reminders.promptNew)
+-- fn⇧⌘N via eventtap: hs.hotkey uses Carbon RegisterEventHotKey, which silently
+-- drops the fn modifier (the binding would register — and capture — plain ⌘⇧N).
+M.fnTap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function(e)
+  local f = e:getFlags()
+  if f.fn and f.cmd and f.shift and not f.alt and not f.ctrl
+      and e:getKeyCode() == hs.keycodes.map.n then
+    reminders.promptNew()
+    return true -- swallow the keystroke
+  end
+  return false
+end)
+M.fnTap:start() -- retained on M: unreferenced eventtaps are garbage-collected
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "t", notifier.test)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "c", menubar.showCurrentContext)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "s", screenText.demo)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "w", screenText.toggleWatch)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "v", viewer.toggle)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "i", suggestions.review)
+hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "m", voice.toggle)
 
 -- global handle for console debugging: hs -c "print(hs.inspect(CR.observer.current))"
 M.config, M.log, M.observer, M.ui, M.notifier, M.menubar = config, log, observer, ui, notifier, menubar
 M.matcher, M.reminders, M.trigger, M.screenText = matcher, reminders, trigger, screenText
-M.viewer, M.suggestions = viewer, suggestions
+M.viewer, M.suggestions, M.voice = viewer, suggestions, voice
 CR = M
 
 print("[cr] Contextual Reminders loaded — project: " .. tostring(projectDir))
-print("[cr] hotkeys: ⌃⌥⌘R reminder · ⌃⌥⌘S OCR · ⌃⌥⌘W watch · ⌃⌥⌘V viewer · ⌃⌥⌘T test · ⌃⌥⌘C context")
+print("[cr] hotkeys: fn⇧⌘N reminder · 🎙 \"hey wispr, remind me to …\" (⌃⌥⌘M) · ⌃⌥⌘S OCR · ⌃⌥⌘W watch · ⌃⌥⌘V viewer · ⌃⌥⌘T test · ⌃⌥⌘C context")
 
 return M

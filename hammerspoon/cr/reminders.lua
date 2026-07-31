@@ -9,6 +9,7 @@ local config = require("cr.config")
 local log = require("cr.log")
 local matcher = require("cr.matcher")
 local observer = require("cr.observer")
+local timeparse = require("cr.timeparse")
 local ui = require("cr.notify_ui")
 
 local M = { items = {} }
@@ -41,29 +42,74 @@ function M.load()
   end
 end
 
-function M.add(text, snap)
+-- opts: { dueAt, channels, via } — all optional. A time expression inside the
+-- text ("… in 5 minutes", "… at 3pm") is extracted here so every creation
+-- path — voice, hotkey, suggestion accept — understands time the same way.
+function M.add(text, snap, opts)
+  opts = opts or {}
+  local clean, dueAt, phrase = timeparse.extract(text)
+  dueAt = dueAt or opts.dueAt
+  if phrase then text = clean end
+
   local ref = matcher.bind(snap)
   if not ref then
-    log.append({ event = "reminder.rejected", reason = "no bindable context", text = text })
-    return nil
+    if dueAt then
+      -- timed reminders don't need a screen referent; record where it was set
+      ref = { kind = "time", label = "anywhere", boundAt = os.time() }
+    else
+      log.append({ event = "reminder.rejected", reason = "no bindable context", text = text })
+      return nil
+    end
   end
   local r = {
     id = string.format("r%d%03d", os.time(), math.random(999)),
     text = text,
     createdAt = os.time(),
     referent = ref,
-    -- deictic reminders are usually born ARMED (the thing is on screen right
-    -- now); if it isn't visible, born PENDING and armed on first sighting
-    state = matcher.matches(ref, snap) and "armed" or "pending",
+    dueAt = dueAt,            -- epoch; nil for purely contextual reminders
+    whenPhrase = phrase,      -- the words the time came from, verbatim
+    channels = opts.channels or { "card" }, -- default: notification on this Mac
+    via = opts.via,
+    -- timed reminders fire on the clock; deictic ones are usually born ARMED
+    -- (the thing is on screen right now), else PENDING until first sighting
+    state = dueAt and "scheduled"
+      or (matcher.matches(ref, snap) and "armed" or "pending"),
     absent = 0,
   }
   M.items[#M.items + 1] = r
   M.persist()
   log.append({
-    event = "reminder.created", id = r.id, text = text,
-    state = r.state, referent = ref.label,
+    event = "reminder.created", id = r.id, text = text, via = opts.via,
+    state = r.state, referent = ref.label, dueAt = dueAt, channels = r.channels,
   })
   return r
+end
+
+-- One-line summary of when/where/how a reminder will surface — shared by the
+-- voice toast, the hotkey toast, and logs so every path tells the same story.
+function M.describe(r)
+  local parts = {}
+  if r.dueAt then
+    parts[#parts + 1] = "⏰ " .. (timeparse.fmtDue(r.dueAt) or "")
+    parts[#parts + 1] = "📍 set from " .. (r.referent and r.referent.label or "?")
+  elseif r.state == "pending" then
+    parts[#parts + 1] = "⏳ arms on first sighting"
+    parts[#parts + 1] = "📍 " .. (r.referent and r.referent.label or "?")
+  else
+    parts[#parts + 1] = "👁 fires when you're done with"
+    parts[#parts + 1] = "📍 " .. (r.referent and r.referent.label or "?")
+  end
+  parts[#parts + 1] = "📣 " .. table.concat(r.channels or { "card" }, "+")
+  return table.concat(parts, " · ")
+end
+
+function M.setChannels(id, channels)
+  local r = M.get(id)
+  if not r or type(channels) ~= "table" or #channels == 0 then return false end
+  r.channels = channels
+  M.persist()
+  log.append({ event = "reminder.channels", id = id, channels = channels })
+  return true
 end
 
 function M.setState(r, state, extra)
@@ -97,13 +143,12 @@ function M.promptNew()
     or "nothing (observer has no context yet)"
   local button, text = hs.dialog.textPrompt(
     "New contextual reminder",
-    'When you\'re done with THIS, you get reminded.\n\nTHIS = ' .. boundTo,
-    "", "Watch it", "Cancel")
-  if button ~= "Watch it" or not text or text == "" then return end
-  local r = M.add(text, snap)
+    'Fires when you\'re done with THIS — or add a time ("… in 5 minutes", "… at 3pm").\n\nTHIS = ' .. boundTo,
+    "", "Remind me", "Cancel")
+  if button ~= "Remind me" or not text or text == "" then return end
+  local r = M.add(text, snap, { via = "hotkey" })
   if r then
-    ui.toast((r.state == "armed" and "👁 Watching: " or "⏳ Will arm on first sighting: ")
-      .. r.referent.label, 2.2)
+    ui.toast('"' .. r.text .. '" — ' .. M.describe(r), 3.2)
   else
     ui.toast("⚠️ Nothing bindable on screen — reminder not created", 2.2)
   end

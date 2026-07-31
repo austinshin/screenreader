@@ -94,6 +94,20 @@ def snapshot() -> dict:
     ctx = hs("local c=CR.observer.current; return c and ((c.app or '?')..' — '..(c.tab or c.title or '')) or 'no context'")
     watching = hs("return tostring(CR.screenText.watching)") == "true"
 
+    # delivery channels + configuration state, straight from the Lua registry
+    try:
+        channels_available = json.loads(
+            hs("return hs.json.encode(CR.notifier.available())") or "[]"
+        )
+    except json.JSONDecodeError:
+        channels_available = []
+    if not channels_available:  # Hammerspoon unreachable — show the default
+        channels_available = [{"name": "card", "configured": True,
+                               "desc": "on-screen card on this Mac (default)"}]
+
+    # everything that was actually delivered (any channel), newest last
+    notifications = [e for e in events if e.get("event") == "notify.dispatch"]
+
     # candidates not yet judged
     judged_ids = {f.get("id") for f in feedback}
     open_cands = [c for c in cands if c.get("id") not in judged_ids]
@@ -112,7 +126,10 @@ def snapshot() -> dict:
             ),
             "labels": len(judged),
             "precision": round(100 * accepted / len(judged)) if judged else None,
+            "notified_today": len(notifications),
         },
+        "channels_available": channels_available,
+        "notifications": notifications[-25:],
         "suggestions": list(reversed(open_cands))[:40],
         "reminders": [
             r for r in reminders if r.get("state") not in ("done", "cancelled")
@@ -135,9 +152,6 @@ def snapshot() -> dict:
             ),
             key=lambda w: -w["multiplier"],
         )[:14],
-        "fires": [
-            e for e in events if e.get("event") in ("trigger.fired", "suggestion.card")
-        ][-10:],
     }
 
 
@@ -215,6 +229,12 @@ button.y:hover{background:rgba(158,206,106,.12)}
 button.n:hover{background:rgba(247,118,142,.12);border-color:rgba(247,118,142,.4)}
 .pill{font-size:11px;padding:1.5px 7px;border-radius:20px;border:1px solid var(--line);
   color:var(--dim);white-space:nowrap}
+.chips{margin-top:7px;display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-size:11px;padding:2px 9px;border-radius:20px;border:1px solid var(--line);
+  color:var(--dim);cursor:pointer;user-select:none;transition:.12s}
+.chip:hover{border-color:var(--accent)}
+.chipOn{border-color:rgba(122,162,247,.55);color:var(--accent);background:rgba(122,162,247,.10)}
+.chipNA{opacity:.45;font-style:italic}
 .empty{color:var(--dim);padding:16px;text-align:center;font-size:13px}
 pre{white-space:pre-wrap;word-break:break-word;font-size:11.5px;color:var(--dim);
   max-height:150px;overflow:auto;margin:8px 0 0;font-family:ui-monospace,Menlo,monospace}
@@ -234,15 +254,16 @@ details summary{cursor:pointer;color:var(--dim);font-size:12px;outline:none}
 <main>
   <div class="stats" id="stats"></div>
 
+  <h2>Notifications — what fired, where it went</h2>
+  <div id="notifs"></div>
+
   <h2>Suggestions — should these become reminders?</h2>
   <div id="sugg"></div>
 
   <div class="grid2">
     <div>
-      <h2>Watching now</h2>
+      <h2>Reminders — click a chip to change delivery</h2>
       <div id="rem"></div>
-      <h2>Recent fires</h2>
-      <div id="fires"></div>
     </div>
     <div>
       <h2>What it's learned</h2>
@@ -256,8 +277,42 @@ details summary{cursor:pointer;color:var(--dim);font-size:12px;outline:none}
 const esc = s => (s??'').toString().replace(/[&<>"]/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+let state = null; // latest /api/state payload, for channel toggling
+
+function fmtDue(ts){
+  const s = ts - Date.now()/1000;
+  const clock = new Date(ts*1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  if (s <= 0) return 'now';
+  if (s < 90) return `in ${Math.round(s)}s (${clock})`;
+  if (s < 5400) return `in ${Math.round(s/60)} min (${clock})`;
+  if (s < 129600) return `in ${(s/3600).toFixed(1)} hr (${clock})`;
+  return `in ${Math.round(s/86400)} d (${clock})`;
+}
+
+function chipRow(r){
+  return (state.channels_available||[]).map(c=>{
+    const active = (r.channels||['card']).includes(c.name);
+    return `<span class="chip ${active?'chipOn':''} ${c.configured?'':'chipNA'}"
+      title="${esc(c.desc)}${c.configured?'':' — not configured yet'}"
+      onclick="toggleCh('${esc(r.id)}','${esc(c.name)}')">${esc(c.name)}</span>`;
+  }).join('');
+}
+
+async function toggleCh(id, name){
+  const r = (state.reminders||[]).find(x=>x.id===id);
+  if(!r) return;
+  const cur = r.channels || ['card'];
+  const next = cur.includes(name) ? cur.filter(c=>c!==name) : cur.concat([name]);
+  if(!next.length) return; // a reminder must land somewhere
+  await fetch('/api/reminder/channels',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id, channels: next})});
+  load();
+}
+
 async function load(){
   const d = await (await fetch('/api/state')).json();
+  state = d;
 
   document.getElementById('ctx').textContent = d.context;
   const w = document.getElementById('watch');
@@ -268,10 +323,22 @@ async function load(){
     ['captures today', c.captures_today],
     ['candidates', c.candidates],
     ['awaiting you', c.open],
-    ['watching', c.reminders_active],
+    ['active reminders', c.reminders_active],
+    ['notified today', c.notified_today],
     ['labels given', c.labels],
     ['precision', c.precision===null?'—':c.precision+'%'],
   ].map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
+
+  document.getElementById('notifs').innerHTML = d.notifications.length
+    ? d.notifications.slice().reverse().map(n=>`<div class="card"><div class="row">
+        <span>${esc(n.icon||'🔔')}</span>
+        <div class="grow">
+          <div class="act">${esc(n.body||n.title||'')}</div>
+          <div class="meta">${esc(n.iso||'')}${n.referent?' · 📍 '+esc(n.referent):''}</div>
+        </div>
+        ${(n.channels||[]).map(ch=>`<span class="pill">📣 ${esc(ch)}</span>`).join('')}
+      </div></div>`).join('')
+    : `<div class="card empty">Nothing delivered yet — say “hey wispr, remind me to stretch in 2 minutes”.</div>`;
 
   document.getElementById('sugg').innerHTML = d.suggestions.length
     ? d.suggestions.map(s=>`<div class="card" id="c-${esc(s.id)}"><div class="row">
@@ -289,15 +356,13 @@ async function load(){
   document.getElementById('rem').innerHTML = d.reminders.length
     ? d.reminders.map(r=>`<div class="card"><div class="row">
         <span class="pill">${esc(r.state)}</span>
-        <div class="grow"><div class="act">${esc(r.text)}</div>
-        <div class="meta">${esc((r.referent&&r.referent.label)||'')}</div></div>
+        <div class="grow">
+          <div class="act">${esc(r.text)}</div>
+          <div class="meta">${r.dueAt?'⏰ '+esc(fmtDue(r.dueAt))+' · ':''}📍 ${esc((r.referent&&r.referent.label)||'')}${r.via?' · via '+esc(r.via):''}</div>
+          <div class="chips">${chipRow(r)}</div>
+        </div>
       </div></div>`).join('')
-    : `<div class="card empty">No active reminders. Press ⌃⌥⌘R while looking at something.</div>`;
-
-  document.getElementById('fires').innerHTML = d.fires.length
-    ? d.fires.slice().reverse().map(f=>`<div class="card"><div class="meta">
-        ${esc(f.iso||'')} — ${esc(f.text||f.title||f.event)}</div></div>`).join('')
-    : `<div class="card empty">Nothing has fired yet.</div>`;
+    : `<div class="card empty">No active reminders. Press fn⇧⌘N — or say “hey wispr, remind me to …”.</div>`;
 
   document.getElementById('weights').innerHTML = d.weights.length
     ? d.weights.map(w=>`<div class="wt"><span class="mono">${esc(w.feature)}</span>
@@ -347,19 +412,37 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):  # noqa: N802
-        if urlparse(self.path).path != "/api/feedback":
-            self._send(404, b"not found", "text/plain")
-            return
+        path = urlparse(self.path).path
         n = int(self.headers.get("Content-Length", 0))
         try:
             payload = json.loads(self.rfile.read(n) or b"{}")
         except json.JSONDecodeError:
             self._send(400, b'{"ok":false}', "application/json")
             return
-        cand = find_candidate(payload.get("id", ""))
-        if cand:
-            write_feedback(cand, payload.get("value", "dismiss"))
-        self._send(200, json.dumps({"ok": bool(cand)}).encode(), "application/json")
+
+        if path == "/api/feedback":
+            cand = find_candidate(payload.get("id", ""))
+            if cand:
+                write_feedback(cand, payload.get("value", "dismiss"))
+            self._send(200, json.dumps({"ok": bool(cand)}).encode(), "application/json")
+
+        elif path == "/api/reminder/channels":
+            # channel edits go through the running Hammerspoon so its in-memory
+            # state and reminders.json can't diverge (Lua owns that file)
+            rid = str(payload.get("id", ""))
+            channels = payload.get("channels", [])
+            valid = {"card", "system", "discord", "slack", "webhook"}
+            if (not rid.isalnum() or not channels
+                    or not all(isinstance(c, str) and c in valid for c in channels)):
+                self._send(400, b'{"ok":false}', "application/json")
+                return
+            lua = "return tostring(CR.reminders.setChannels('%s', {%s}))" % (
+                rid, ",".join(f"'{c}'" for c in channels))
+            ok = hs(lua) == "true"
+            self._send(200, json.dumps({"ok": ok}).encode(), "application/json")
+
+        else:
+            self._send(404, b"not found", "text/plain")
 
     def log_message(self, *a):  # silence per-request logging
         pass

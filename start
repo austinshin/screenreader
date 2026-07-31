@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Contextual Reminders — one-command runner.
+#
+#   ./start           bring everything up (idempotent; restarts stale services)
+#   ./start status    what's running
+#   ./start stop      stop the background services
+#
+# Hammerspoon (observer, triggers, voice, hotkeys) runs as an app and is only
+# checked here, not managed. This script owns the two Python services:
+#   dashboard  service/ui.py            http://localhost:8765
+#   extractor  service/extract.py       OCR → reminder suggestions (Claude)
+set -euo pipefail
+cd "$(dirname "$0")"
+
+PY=.venv/bin/python
+PORT="${CR_UI_PORT:-8765}"
+mkdir -p tmp logs data
+UI_PID=tmp/ui.pid
+EX_PID=tmp/extract.pid
+
+# API key: environment wins; otherwise the macOS Keychain item created during
+# setup (security add-generic-password -s ANTHROPIC_API_KEY ...).
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+  export ANTHROPIC_API_KEY="$(security find-generic-password -s ANTHROPIC_API_KEY -w 2>/dev/null || true)"
+fi
+
+alive() { [[ -f "$1" ]] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
+
+start_one() { # name pidfile cmd...
+  local name=$1 pidfile=$2; shift 2
+  if alive "$pidfile"; then
+    echo "  $name: already running (pid $(cat "$pidfile"))"
+    return
+  fi
+  nohup "$@" >> "logs/$name.out" 2>&1 &
+  echo $! > "$pidfile"
+  echo "  $name: started (pid $!)"
+}
+
+stop_one() {
+  local name=$1 pidfile=$2
+  if alive "$pidfile"; then
+    kill "$(cat "$pidfile")" 2>/dev/null || true
+    rm -f "$pidfile"
+    echo "  $name: stopped"
+  else
+    rm -f "$pidfile"
+    echo "  $name: not running"
+  fi
+}
+
+# A dashboard listener we didn't start (old shell, stale pidfile) blocks the
+# port — restart it under our management so `./start` always serves fresh code.
+reclaim_port() {
+  local pid
+  pid="$(lsof -ti ":$PORT" 2>/dev/null || true)"
+  [[ -z "$pid" ]] && return
+  if [[ -f "$UI_PID" && "$pid" == "$(cat "$UI_PID" 2>/dev/null)" ]]; then return; fi
+  if ps -p "$pid" -o command= | grep -q "ui.py"; then
+    echo "  dashboard: restarting stale instance (pid $pid)"
+    kill "$pid" 2>/dev/null || true
+    sleep 0.5
+  else
+    echo "  ⚠ port $PORT is held by another process (pid $pid) — dashboard will fail to bind"
+  fi
+}
+
+case "${1:-up}" in
+  stop)
+    stop_one dashboard "$UI_PID"
+    stop_one extractor "$EX_PID"
+    ;;
+  status)
+    alive "$UI_PID" && echo "  dashboard:   up (pid $(cat "$UI_PID")) → http://localhost:$PORT" \
+                    || echo "  dashboard:   down"
+    alive "$EX_PID" && echo "  extractor:   up (pid $(cat "$EX_PID"))" \
+                    || echo "  extractor:   down"
+    pgrep -x hear >/dev/null && echo '  voice:       on — "hey wispr, remind me to …"' \
+                             || echo "  voice:       off (toggle ⌃⌥⌘M)"
+    hs -c "return 'ok'" >/dev/null 2>&1 && echo "  hammerspoon: reachable" \
+                                        || echo "  hammerspoon: NOT reachable — open Hammerspoon.app"
+    ;;
+  up|start)
+    [[ -x "$PY" ]] || { echo "no .venv — run: python3 -m venv .venv && .venv/bin/pip install anthropic"; exit 1; }
+    [[ -n "$ANTHROPIC_API_KEY" ]] || echo "  ⚠ no ANTHROPIC_API_KEY (env or Keychain) — extractor falls back to regex rules"
+    reclaim_port
+    start_one dashboard "$UI_PID" "$PY" service/ui.py
+    start_one extractor "$EX_PID" "$PY" service/extract.py --watch
+    hs -c "return 'ok'" >/dev/null 2>&1 || echo "  ⚠ Hammerspoon not reachable — open Hammerspoon.app"
+    pgrep -x hear >/dev/null && echo '  voice: on — try "hey wispr, remind me to stretch in 2 minutes"' \
+                             || echo "  voice: off — toggle with ⌃⌥⌘M"
+    echo
+    echo "  dashboard → http://localhost:$PORT"
+    echo "  hotkey    → fn⇧⌘N (works with time too: \"… in 5 minutes\", \"… at 3pm\")"
+    ;;
+  *)
+    echo "usage: ./start [status|stop]"
+    exit 1
+    ;;
+esac
