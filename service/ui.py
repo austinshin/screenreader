@@ -416,6 +416,16 @@ kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-b
 const esc = s => (s??'').toString().replace(/[&<>"]/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+// Every section renders from one load(); a null element threw and took the
+// whole page down with it — renaming a heading blanked the reminders list,
+// which is the one thing the page exists to show. A missing node now costs
+// its own section and says so in the console, instead of everything after it.
+function $(id){
+  const n = document.getElementById(id);
+  if(!n) console.warn('[cr] missing element:', id);
+  return n || {innerHTML:'', textContent:'', style:{}, classList:{toggle(){}, add(){}}};
+}
+
 let state = null; // latest /api/state payload, for channel toggling
 
 // ------------------------------------------------------------- tabs ---------
@@ -443,7 +453,7 @@ function setTab(id){
 }
 
 function renderTabs(d){
-  document.getElementById('tabs').innerHTML = TABS.map(t=>{
+  $('tabs').innerHTML = TABS.map(t=>{
     const n = t.count(d);
     return `<button data-tab="${t.id}" class="${t.id===tab?'sel':''}"
       onclick="setTab('${t.id}')">${t.label}${
@@ -499,7 +509,7 @@ function railFor(r){
 }
 
 function renderReminders(list){
-  const el = document.getElementById('rem');
+  const el = $('rem');
   if(!list.length){
     el.innerHTML = `<div class="card empty">
       Nothing scheduled.<br>Say “hey wispr, remind me to …” or press ⌃⌥⌘N.</div>`;
@@ -563,8 +573,8 @@ async function load(){
   const d = await (await fetch('/api/state')).json();
   state = d;
 
-  document.getElementById('ctx').textContent = '👁 ' + d.context;
-  const w = document.getElementById('watch');
+  $('ctx').textContent = '👁 ' + d.context;
+  const w = $('watch');
   w.innerHTML = `<span class="dot ${d.watching?'on':'off'}"></span>`
     + `${d.watching?'watching':'idle'}${d.voice?' · 🎙 listening':''}`;
 
@@ -574,7 +584,7 @@ async function load(){
   // non-default delivery is worth calling out; a plain local card is assumed
   const chPills = ch => (ch && (ch.length > 1 || ch[0] !== 'card'))
     ? ch.map(x=>`<span class="pill">📣 ${esc(x)}</span>`).join('') : '';
-  document.getElementById('notifs').innerHTML = d.notifications.length
+  $('notifs').innerHTML = d.notifications.length
     ? d.notifications.slice(-10).reverse().map(n=>`<div class="card"><div class="row">
         <div class="grow">
           <div class="act">${esc(n.body||n.title||'')}</div>
@@ -586,13 +596,11 @@ async function load(){
     : `<div class="card empty">Nothing delivered yet — try “hey wispr, remind me to stretch in 2 minutes”.</div>`;
 
   const open = d.suggestions || [];
-  queue = open;
-  document.getElementById('suggHead').textContent =
-    'Teach it' + (open.length ? ` (${open.length} to review)` : '');
+  queue = open;   // the count now lives in the tab bar, not a heading
   renderTeach();
   renderTrainBar();
 
-  document.getElementById('sugg').innerHTML = open.length
+  $('sugg').innerHTML = open.length
     ? open.map(s=>`<div class="card" id="c-${esc(s.id)}"><div class="row">
         <div class="grow">
           <div class="act">${esc(s.action)}</div>
@@ -606,7 +614,7 @@ async function load(){
 
   renderReminders(d.reminders || []);
 
-  document.getElementById('devstats').innerHTML = [
+  $('devstats').innerHTML = [
     ['ocr captures today', c.captures_today],
     ['capture files', c.capture_files],
     ['candidates found', c.candidates],
@@ -614,14 +622,14 @@ async function load(){
     ['precision', c.precision===null?'—':c.precision+'%'],
   ].map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
 
-  document.getElementById('weights').innerHTML = d.weights.length
+  $('weights').innerHTML = d.weights.length
     ? d.weights.map(w=>`<div class="wt"><span class="mono">${esc(w.feature)}</span>
         <span><b class="mono">${w.multiplier.toFixed(2)}×</b>
         <span style="color:var(--dim)"> ${w.accept}✓ ${w.dismiss}✗</span></span></div>`).join('')
     : `<div class="empty">No weights yet — answer a few suggestions, then run<br>
        <span class="mono">extract.py --learn</span></div>`;
 
-  document.getElementById('caps').innerHTML = d.captures.slice(0,8).map(c=>`<div class="card">
+  $('caps').innerHTML = d.captures.slice(0,8).map(c=>`<div class="card">
       <div class="meta">${esc(fmtAgo(c.iso))} · ${c.chars} chars · ${c.ms}ms · ${esc(c.mode||'')}</div>
       <div class="act" style="font-size:13px">${esc(c.source)}</div>
       <details><summary>text</summary><pre>${esc(c.text)}</pre></details>
@@ -639,7 +647,7 @@ setTab(tab);  // restore the view you were last in, before the first fetch lands
 let queue = [], cursor = 0, lastTrain = null, busy = false;
 
 function renderTeach(){
-  const el = document.getElementById('teach');
+  const el = $('teach');
   const c = queue[cursor];
   if(!c){
     el.innerHTML = `<div class="card empty">
@@ -670,7 +678,7 @@ function renderTrainBar(){
   const t = state.training || {labels:0, target:20, accepts:0, dismisses:0};
   const pct = Math.min(100, Math.round(100*t.labels/Math.max(t.target,1)));
   const ready = t.labels >= t.target;
-  document.getElementById('trainbar').innerHTML = `<div class="card">
+  $('trainbar').innerHTML = `<div class="card">
     <div class="row">
       <div class="grow">
         <div class="meta">${t.labels} labels · ${t.accepts} kept · ${t.dismisses} rejected${
@@ -752,7 +760,7 @@ document.addEventListener('keydown', e=>{
 });
 
 async function judge(id, value){
-  const el = document.getElementById('c-'+id);
+  const el = $('c-'+id);
   if(el){ el.style.opacity=.35; }
   await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id,value})});
