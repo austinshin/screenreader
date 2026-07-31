@@ -33,12 +33,46 @@ local candidate = nil          -- latest parsed reminder text, awaiting settle
 local settleTimer, pollTimer, healthTimer
 local lastFired = { text = "", at = 0 }
 
--- What SFSpeechRecognizer tends to make of "wispr". Matched against
--- normalized text (lowercased, punctuation stripped).
+-- Matching the whole phrase "hey wispr" was too brittle: the recognizer hears
+-- the leading "hey" as whatever it likes ("It whisper remind me to…", "A
+-- whisper…", "Hay wispr…"), so anchoring on it threw away real commands. Only
+-- the distinctive token is matched now, anywhere in the line — the wake word
+-- is doing the work, and "hey" was never carrying signal.
 local WAKE = {
-  "hey wispr", "hey whisper", "hey wisper", "hey whispr",
-  "hey whispers", "a whisper", "hey vesper",
+  "wispr", "whispr", "whisper", "wisper", "whispers", "wispers",
+  "vesper", "vespr", "whisker", "wesper", "with per", "wis per",
 }
+
+-- Words a sentence can end on when the recognizer cuts an utterance early:
+-- "send a video later in" — the time was still coming.
+local DANGLING = {
+  ["in"] = true, ["at"] = true, ["by"] = true, ["on"] = true, ["for"] = true,
+  ["to"] = true, ["around"] = true, ["about"] = true, ["like"] = true,
+  ["until"] = true, ["till"] = true, ["before"] = true, ["after"] = true,
+}
+
+local function trimDangling(s)
+  local out = s
+  while true do
+    local head, last = out:match("^(.-)%s+(%a+)$")
+    if head and DANGLING[last] then out = head else break end
+  end
+  return out
+end
+
+-- Does this line look like nothing but a time? ("like 12 pm", "in 5 minutes")
+-- Used to reattach a time the recognizer split into its own utterance.
+local function timeOnly(t)
+  if #t > 34 then return nil end
+  local body = t:gsub("^%s*like%s+", ""):gsub("^%s*", "")
+  local hasDigit = body:match("%d")
+  local hasUnit = body:match("%f[%a](am|pm|minutes?|mins?|hours?|hrs?|seconds?|secs?|o'?clock)%f[%A]")
+    or body:match("%f[%a]tomorrow%f[%A]") or body:match("%f[%a]tonight%f[%A]")
+  if not (hasDigit or hasUnit) then return nil end
+  -- a bare clock time needs a preposition for cr.timeparse to see it
+  if body:match("^%d") then return "at " .. body end
+  return body
+end
 
 local function cfg()
   return config.voice or {}
@@ -67,21 +101,22 @@ local function norm(s)
 end
 
 -- Extract the reminder text from one transcript line, or nil.
--- "hey wispr remind me to do the laundry" → "do the laundry"
+-- "it whisper remind me to do the laundry" → "do the laundry"
 function M._parse(line)
   local t = norm(line)
   local wakeEnd
   for _, w in ipairs(WAKE) do
     local _, e = t:find(w, 1, true)
-    if e then wakeEnd = e; break end
+    if e and (not wakeEnd or e < wakeEnd) then wakeEnd = e end
   end
   if not wakeEnd then return nil end
   local rest = t:sub(wakeEnd + 1)
   local text = rest:match("remind me to (.+)$")
     or rest:match("remind me (.+)$")
     or rest:match("reminder to (.+)$")
+    or rest:match("remember to (.+)$")
   if text then
-    text = text:match("^%s*(.-)%s*$")
+    text = trimDangling(text:match("^%s*(.-)%s*$"))
     if #text >= 3 then return text end
   end
   return nil
@@ -109,17 +144,35 @@ local function fire(text)
   end
 end
 
--- Feed one transcript line through parse + settle. Exposed for testing.
-function M._ingest(line)
-  local text = M._parse(line)
-  if not text or text == candidate then return end
-  candidate = text
+local function arm()
   if settleTimer then settleTimer:stop() end
   settleTimer = hs.timer.doAfter(cfg().settleSeconds or 1.5, function()
     local c = candidate
     candidate = nil
     if c then fire(c) end
   end)
+end
+
+-- Feed one transcript line through parse + settle. Exposed for testing.
+function M._ingest(line)
+  local text = M._parse(line)
+  if not text then
+    -- The recognizer ends an utterance wherever it hears a pause, which lands
+    -- mid-sentence often enough to matter: "…remind me to send a video later
+    -- in" / "Like 12 PM" was one thought split in two, and dropping the second
+    -- half silently loses the time. If a time-shaped fragment lands while a
+    -- command is still settling, it belongs to that command.
+    local tail = candidate and timeOnly(norm(line))
+    if tail then
+      candidate = candidate .. " " .. tail
+      log.append({ event = "voice.merged_tail", tail = tail, text = candidate })
+      arm()
+    end
+    return
+  end
+  if text == candidate then return end
+  candidate = text
+  arm()
 end
 
 -- Read whatever hear appended to the transcript since the last poll.
