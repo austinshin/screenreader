@@ -68,7 +68,9 @@ def hs(lua: str) -> str:
 
 def snapshot() -> dict:
     ocr = _tail_jsonl(today("ocr"), 40)
-    events = _tail_jsonl(today("events"), 600)
+    # deep tail: heartbeat events vastly outnumber the notify.dispatch rows the
+    # Delivered list is built from — a shallow tail loses the day's deliveries
+    events = _tail_jsonl(today("events"), 8000)
     cands = _tail_jsonl(DATA / "candidates.jsonl", 200)
     feedback = _tail_jsonl(DATA / "feedback.jsonl", 500)
 
@@ -90,9 +92,22 @@ def snapshot() -> dict:
 
     judged = [f for f in feedback if f.get("value") in ("accept", "dismiss", "not_mine")]
     accepted = sum(1 for f in judged if f["value"] == "accept")
+    # weights only start meaning anything once each feature has a few
+    # observations; PRIOR=3 smoothing means ~20 labels before it moves much
+    TRAIN_TARGET = 20
+    trained_at = 0
+    wpath_ = DATA / "weights.json"
+    if wpath_.exists():
+        try:
+            ws = json.loads(wpath_.read_text())
+            trained_at = sum(w.get("accept", 0) + w.get("dismiss", 0)
+                             for w in ws.values()) and len(ws)
+        except json.JSONDecodeError:
+            pass
 
     ctx = hs("local c=CR.observer.current; return c and ((c.app or '?')..' — '..(c.tab or c.title or '')) or 'no context'")
     watching = hs("return tostring(CR.screenText.watching)") == "true"
+    voice = hs("return tostring(CR.voice and CR.voice.running)") == "true"
 
     # delivery channels + configuration state, straight from the Lua registry
     try:
@@ -116,6 +131,7 @@ def snapshot() -> dict:
     return {
         "context": ctx or "Hammerspoon not reachable",
         "watching": watching,
+        "voice": voice,
         "counts": {
             "captures_today": len(ocr),
             "capture_files": len(list(caps_dir.glob("*.md"))) if caps_dir.exists() else 0,
@@ -130,6 +146,14 @@ def snapshot() -> dict:
         },
         "channels_available": channels_available,
         "notifications": notifications[-25:],
+        "training": {
+            "labels": len(judged),
+            "accepts": accepted,
+            "dismisses": len(judged) - accepted,
+            "target": TRAIN_TARGET,
+            "features_learned": trained_at,
+            "can_undo": bool(feedback),
+        },
         "suggestions": list(reversed(open_cands))[:40],
         "reminders": [
             r for r in reminders if r.get("state") not in ("done", "cancelled")
@@ -181,6 +205,61 @@ def find_candidate(cid: str) -> dict | None:
     return None
 
 
+def undo_last_feedback() -> dict | None:
+    """Drop the most recent label. Mislabeling is the one thing that quietly
+    poisons a learning loop, so the fix has to be as cheap as the mistake."""
+    path = DATA / "feedback.jsonl"
+    if not path.exists():
+        return None
+    lines = [l for l in path.read_text().splitlines() if l.strip()]
+    if not lines:
+        return None
+    last = lines.pop()
+    path.write_text("\n".join(lines) + ("\n" if lines else ""))
+    try:
+        return json.loads(last)
+    except json.JSONDecodeError:
+        return {}
+
+
+def run_learn() -> dict:
+    """Recompute weights from the labels collected so far.
+
+    Shells out to extract.py rather than importing it: the same command the
+    user would run by hand, so the UI can't drift from the CLI.
+    """
+    before = {}
+    wpath = DATA / "weights.json"
+    if wpath.exists():
+        try:
+            before = json.loads(wpath.read_text())
+        except json.JSONDecodeError:
+            pass
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "service" / "extract.py"), "--learn"],
+        capture_output=True, text=True, timeout=30,
+    )
+    after = {}
+    if wpath.exists():
+        try:
+            after = json.loads(wpath.read_text())
+        except json.JSONDecodeError:
+            pass
+    rows = []
+    for feat, w in sorted(after.items(), key=lambda kv: -kv[1]["multiplier"]):
+        prev = before.get(feat, {}).get("multiplier")
+        rows.append({
+            "feature": feat,
+            "multiplier": w["multiplier"],
+            "accept": w["accept"],
+            "dismiss": w["dismiss"],
+            "delta": None if prev is None else round(w["multiplier"] - prev, 3),
+            "is_new": prev is None,
+        })
+    return {"ok": proc.returncode == 0, "message": proc.stdout.strip().splitlines()[-1]
+            if proc.stdout.strip() else proc.stderr.strip()[:200], "weights": rows}
+
+
 # ------------------------------------------------------------------ page -----
 
 PAGE = r"""<!doctype html>
@@ -196,31 +275,27 @@ PAGE = r"""<!doctype html>
   --accent:#3b6fe0; --good:#4e8c2f; --warn:#c77d1a; --bad:#d64560;}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--txt);
-  font:14px/1.55 ui-sans-serif,-apple-system,"SF Pro Text",system-ui,sans-serif}
-header{padding:20px 24px 14px;border-bottom:1px solid var(--line);
-  display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  font:14.5px/1.6 ui-sans-serif,-apple-system,"SF Pro Text",system-ui,sans-serif}
+header{padding:22px 24px 14px;border-bottom:1px solid var(--line);
+  display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
 h1{font-size:17px;margin:0;font-weight:650;letter-spacing:-.01em}
-.ctx{color:var(--dim);font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46vw}
+.ctx{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:44vw;margin-left:auto}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
 .on{background:var(--good)}.off{background:var(--dim)}
-main{padding:20px 24px 60px;max-width:1180px;margin:0 auto}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-bottom:22px}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px}
+main{padding:22px 24px 70px;max-width:760px;margin:0 auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-bottom:8px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
 .stat b{display:block;font-size:22px;font-weight:640;letter-spacing:-.02em}
 .stat span{color:var(--dim);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em}
 h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
-  margin:26px 0 10px;font-weight:600}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
-  padding:13px 15px;margin-bottom:9px}
+  margin:30px 0 10px;font-weight:600}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px;margin-bottom:10px}
 .row{display:flex;gap:12px;align-items:flex-start}
 .grow{flex:1;min-width:0}
-.act{font-weight:520}
-.meta{color:var(--dim);font-size:12px;margin-top:3px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.score{font-family:ui-monospace,Menlo,monospace;font-size:12px;padding:2px 7px;
-  border-radius:5px;background:rgba(122,162,247,.13);color:var(--accent);white-space:nowrap}
-.score.hi{background:rgba(224,175,104,.16);color:var(--warn)}
+.act{font-weight:560;font-size:15px}
+.when{color:var(--accent);font-size:13px;white-space:nowrap}
 button{font:inherit;font-size:12.5px;padding:5px 11px;border-radius:7px;cursor:pointer;
   border:1px solid var(--line);background:transparent;color:var(--txt);transition:.12s}
 button:hover{border-color:var(--accent)}
@@ -239,6 +314,28 @@ button.n:hover{background:rgba(247,118,142,.12);border-color:rgba(247,118,142,.4
 pre{white-space:pre-wrap;word-break:break-word;font-size:11.5px;color:var(--dim);
   max-height:150px;overflow:auto;margin:8px 0 0;font-family:ui-monospace,Menlo,monospace}
 details summary{cursor:pointer;color:var(--dim);font-size:12px;outline:none}
+#internals{margin-top:44px;border-top:1px solid var(--line);padding-top:14px}
+#internals>summary{text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+
+/* teaching surface */
+.teach{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
+.teachTop{display:flex;justify-content:space-between;align-items:center;
+  color:var(--dim);font-size:12px;margin-bottom:14px}
+.teachAct{font-size:19px;font-weight:600;letter-spacing:-.01em;line-height:1.35}
+.quote{margin:12px 0 0;padding:9px 13px;border-left:2px solid var(--line);
+  color:var(--dim);font-size:13px;font-style:italic}
+.feat{display:flex;gap:6px;flex-wrap:wrap;margin-top:13px}
+.feat span{font-size:10.5px;padding:2px 8px;border-radius:5px;background:var(--bg);
+  border:1px solid var(--line);color:var(--dim);font-family:ui-monospace,Menlo,monospace}
+.teachBtns{display:flex;gap:9px;margin-top:18px;flex-wrap:wrap}
+.teachBtns button{padding:9px 16px;font-size:13.5px;border-radius:9px}
+kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-bottom-width:2px;
+  border-radius:4px;padding:1px 5px;color:var(--dim);margin-left:5px}
+.bar{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin:12px 0 6px}
+.bar>i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.trained{background:rgba(158,206,106,.10);border:1px solid rgba(158,206,106,.35);
+  border-radius:10px;padding:12px 14px;margin-top:12px;font-size:13px}
+.up{color:var(--good)}.down{color:var(--bad)}
 .wt{display:flex;justify-content:space-between;gap:10px;padding:5px 0;
   border-bottom:1px solid var(--line);font-size:12.5px}
 .wt:last-child{border:0}
@@ -254,24 +351,35 @@ details summary{cursor:pointer;color:var(--dim);font-size:12px;outline:none}
 <main>
   <div class="stats" id="stats"></div>
 
-  <h2>Notifications — what fired, where it went</h2>
+  <h2>Coming up</h2>
+  <div id="rem"></div>
+
+  <h2>Delivered</h2>
   <div id="notifs"></div>
 
-  <h2>Suggestions — should these become reminders?</h2>
-  <div id="sugg"></div>
+  <h2 id="suggHead">Teach it</h2>
+  <div id="teach"></div>
+  <div id="trainbar"></div>
 
-  <div class="grid2">
-    <div>
-      <h2>Reminders — click a chip to change delivery</h2>
-      <div id="rem"></div>
+  <details id="restQueue" style="margin-top:10px">
+    <summary>see the whole queue</summary>
+    <div id="sugg" style="margin-top:10px"></div>
+  </details>
+
+  <details id="internals">
+    <summary>Internals — how it sees, learns, and scores</summary>
+    <div class="stats" id="devstats" style="margin-top:14px"></div>
+    <div class="grid2">
+      <div>
+        <h2>What it's learned</h2>
+        <div class="card" id="weights"></div>
+      </div>
+      <div>
+        <h2>Latest captures</h2>
+        <div id="caps"></div>
+      </div>
     </div>
-    <div>
-      <h2>What it's learned</h2>
-      <div class="card" id="weights"></div>
-      <h2>Latest captures</h2>
-      <div id="caps"></div>
-    </div>
-  </div>
+  </details>
 </main>
 <script>
 const esc = s => (s??'').toString().replace(/[&<>"]/g, c =>
@@ -287,6 +395,27 @@ function fmtDue(ts){
   if (s < 5400) return `in ${Math.round(s/60)} min (${clock})`;
   if (s < 129600) return `in ${(s/3600).toFixed(1)} hr (${clock})`;
   return `in ${Math.round(s/86400)} d (${clock})`;
+}
+
+function fmtAgo(iso){
+  if(!iso) return '';
+  const d = new Date(iso), s = (Date.now() - d.getTime())/1000;
+  const clock = d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.round(s/60)} min ago`;
+  if (d.toDateString() === new Date().toDateString()) return clock;
+  return d.toLocaleDateString([], {weekday:'short'}) + ' ' + clock;
+}
+
+// one plain-language line per reminder — no state-machine jargon
+function stateLine(r){
+  if (r.state === 'scheduled') return '⏰ ' + fmtDue(r.dueAt);
+  if (r.state === 'pending')   return "⏳ will start watching when it appears";
+  if (r.state === 'armed')     return "👁 watching — reminds you when you're done";
+  if (r.state === 'cooldown' || r.state === 'ready') return "👀 you stepped away — reminding you soon";
+  if (r.state === 'snoozed')   return '💤 snoozed';
+  if (r.state === 'fired')     return '🔔 reminded — mark it done on the card';
+  return r.state;
 }
 
 function chipRow(r){
@@ -314,55 +443,68 @@ async function load(){
   const d = await (await fetch('/api/state')).json();
   state = d;
 
-  document.getElementById('ctx').textContent = d.context;
+  document.getElementById('ctx').textContent = '👁 ' + d.context;
   const w = document.getElementById('watch');
-  w.innerHTML = `<span class="dot ${d.watching?'on':'off'}"></span>${d.watching?'watching':'idle'}`;
+  w.innerHTML = `<span class="dot ${d.watching?'on':'off'}"></span>`
+    + `${d.watching?'watching':'idle'}${d.voice?' · 🎙 listening':''}`;
 
   const c = d.counts;
   document.getElementById('stats').innerHTML = [
-    ['captures today', c.captures_today],
-    ['candidates', c.candidates],
-    ['awaiting you', c.open],
-    ['active reminders', c.reminders_active],
-    ['notified today', c.notified_today],
-    ['labels given', c.labels],
-    ['precision', c.precision===null?'—':c.precision+'%'],
+    ['coming up', c.reminders_active],
+    ['delivered today', c.notified_today],
+    ['suggestions', c.open],
   ].map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
 
+  // non-default delivery is worth calling out; a plain local card is assumed
+  const chPills = ch => (ch && (ch.length > 1 || ch[0] !== 'card'))
+    ? ch.map(x=>`<span class="pill">📣 ${esc(x)}</span>`).join('') : '';
   document.getElementById('notifs').innerHTML = d.notifications.length
-    ? d.notifications.slice().reverse().map(n=>`<div class="card"><div class="row">
-        <span>${esc(n.icon||'🔔')}</span>
+    ? d.notifications.slice(-10).reverse().map(n=>`<div class="card"><div class="row">
         <div class="grow">
           <div class="act">${esc(n.body||n.title||'')}</div>
-          <div class="meta">${esc(n.iso||'')}${n.referent?' · 📍 '+esc(n.referent):''}</div>
+          <div class="meta">${n.referent?'📍 '+esc(n.referent):''}</div>
         </div>
-        ${(n.channels||[]).map(ch=>`<span class="pill">📣 ${esc(ch)}</span>`).join('')}
+        ${chPills(n.channels)}
+        <span class="when">${esc(fmtAgo(n.iso))}</span>
       </div></div>`).join('')
-    : `<div class="card empty">Nothing delivered yet — say “hey wispr, remind me to stretch in 2 minutes”.</div>`;
+    : `<div class="card empty">Nothing delivered yet — try “hey wispr, remind me to stretch in 2 minutes”.</div>`;
 
-  document.getElementById('sugg').innerHTML = d.suggestions.length
-    ? d.suggestions.map(s=>`<div class="card" id="c-${esc(s.id)}"><div class="row">
-        <span class="score ${s.score>=.55?'hi':''}">${(s.score??0).toFixed(2)}</span>
+  const open = d.suggestions || [];
+  queue = open;
+  document.getElementById('suggHead').textContent =
+    'Teach it' + (open.length ? ` (${open.length} to review)` : '');
+  renderTeach();
+  renderTrainBar();
+
+  document.getElementById('sugg').innerHTML = open.length
+    ? open.map(s=>`<div class="card" id="c-${esc(s.id)}"><div class="row">
         <div class="grow">
           <div class="act">${esc(s.action)}</div>
-          <div class="meta">${esc(s.source||'')} · ${esc(s.kind||'')} · via ${esc(s.backend||'')}</div>
+          <div class="meta">spotted in ${esc(s.app||s.source||'your screen')}</div>
         </div>
-        <button class="y" onclick="judge('${esc(s.id)}','accept')">Yes</button>
-        <button onclick="judge('${esc(s.id)}','not_mine')">Not mine</button>
+        <button class="y" onclick="judge('${esc(s.id)}','accept')">Remind me</button>
         <button class="n" onclick="judge('${esc(s.id)}','dismiss')">No</button>
+        <button onclick="judge('${esc(s.id)}','not_mine')">Not mine</button>
       </div></div>`).join('')
-    : `<div class="card empty">Nothing waiting. Suggestions appear here as they're found.</div>`;
+    : `<div class="card empty">Nothing waiting.</div>`;
 
   document.getElementById('rem').innerHTML = d.reminders.length
     ? d.reminders.map(r=>`<div class="card"><div class="row">
-        <span class="pill">${esc(r.state)}</span>
         <div class="grow">
           <div class="act">${esc(r.text)}</div>
-          <div class="meta">${r.dueAt?'⏰ '+esc(fmtDue(r.dueAt))+' · ':''}📍 ${esc((r.referent&&r.referent.label)||'')}${r.via?' · via '+esc(r.via):''}</div>
+          <div class="meta">${esc(stateLine(r))}${r.referent&&r.referent.label&&r.referent.label!=='anywhere'?' · 📍 '+esc(r.referent.label):''}</div>
           <div class="chips">${chipRow(r)}</div>
         </div>
       </div></div>`).join('')
-    : `<div class="card empty">No active reminders. Press fn⇧⌘N — or say “hey wispr, remind me to …”.</div>`;
+    : `<div class="card empty">Nothing yet. Say “hey wispr, remind me to …” — or press fn⇧⌘N.</div>`;
+
+  document.getElementById('devstats').innerHTML = [
+    ['ocr captures today', c.captures_today],
+    ['capture files', c.capture_files],
+    ['candidates found', c.candidates],
+    ['labels given', c.labels],
+    ['precision', c.precision===null?'—':c.precision+'%'],
+  ].map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
 
   document.getElementById('weights').innerHTML = d.weights.length
     ? d.weights.map(w=>`<div class="wt"><span class="mono">${esc(w.feature)}</span>
@@ -371,12 +513,134 @@ async function load(){
     : `<div class="empty">No weights yet — answer a few suggestions, then run<br>
        <span class="mono">extract.py --learn</span></div>`;
 
-  document.getElementById('caps').innerHTML = d.captures.map(c=>`<div class="card">
-      <div class="meta">${esc(c.iso)} · ${c.chars} chars · ${c.ms}ms · ${esc(c.mode||'')}</div>
+  document.getElementById('caps').innerHTML = d.captures.slice(0,8).map(c=>`<div class="card">
+      <div class="meta">${esc(fmtAgo(c.iso))} · ${c.chars} chars · ${c.ms}ms · ${esc(c.mode||'')}</div>
       <div class="act" style="font-size:13px">${esc(c.source)}</div>
       <details><summary>text</summary><pre>${esc(c.text)}</pre></details>
     </div>`).join('') || `<div class="card empty">No captures yet.</div>`;
 }
+
+// remember whether the internals drawer was open
+const internals = document.getElementById('internals');
+internals.open = localStorage.getItem('cr.internals') === '1';
+internals.addEventListener('toggle',
+  () => localStorage.setItem('cr.internals', internals.open ? '1' : '0'));
+
+// ---------------------------------------------------------- teaching --------
+// Labeling is the only thing the learning layer runs on, so the cost of one
+// label has to be near zero: one card at a time, one keystroke each, and an
+// undo — because a wrong label is worse than no label.
+
+let queue = [], cursor = 0, lastTrain = null, busy = false;
+
+function renderTeach(){
+  const el = document.getElementById('teach');
+  const c = queue[cursor];
+  if(!c){
+    el.innerHTML = `<div class="card empty">
+      All caught up — nothing left to review.<br>
+      New suggestions appear here as they're spotted on your screen.</div>`;
+    return;
+  }
+  const feats = (c.features||[]).map(f=>`<span>${esc(f)}</span>`).join('');
+  el.innerHTML = `<div class="teach">
+    <div class="teachTop">
+      <span>${cursor+1} of ${queue.length} · spotted in ${esc(c.app||c.source||'your screen')}</span>
+      <span>confidence ${(c.confidence??c.score??0).toFixed(2)}</span>
+    </div>
+    <div class="teachAct">${esc(c.action)}</div>
+    ${c.evidence?`<div class="quote">“${esc(c.evidence)}”</div>`:''}
+    <div class="feat">${feats}</div>
+    <div class="teachBtns">
+      <button class="y" onclick="label('accept')">Remind me<kbd>Y</kbd></button>
+      <button class="n" onclick="label('dismiss')">Not a task<kbd>N</kbd></button>
+      <button onclick="label('not_mine')">Not mine<kbd>M</kbd></button>
+      <button onclick="skip()">Skip<kbd>→</kbd></button>
+      <button onclick="undo()" style="margin-left:auto">Undo<kbd>U</kbd></button>
+    </div>
+  </div>`;
+}
+
+function renderTrainBar(){
+  const t = state.training || {labels:0, target:20, accepts:0, dismisses:0};
+  const pct = Math.min(100, Math.round(100*t.labels/Math.max(t.target,1)));
+  const ready = t.labels >= t.target;
+  document.getElementById('trainbar').innerHTML = `<div class="card">
+    <div class="row">
+      <div class="grow">
+        <div class="meta">${t.labels} labels · ${t.accepts} kept · ${t.dismisses} rejected${
+          t.features_learned?` · ${t.features_learned} features learned`:''}</div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="meta">${ready
+          ? 'Enough signal to train on.'
+          : `${t.target - t.labels} more before the weights mean much (each feature needs a few examples).`}</div>
+      </div>
+      <button class="${ready?'y':''}" onclick="train()" ${busy?'disabled':''}>
+        ${busy?'Training…':'Train now'}</button>
+    </div>
+    ${lastTrain?renderTrained():''}
+  </div>`;
+}
+
+function renderTrained(){
+  if(!lastTrain.ok) return `<div class="trained">Training failed: ${esc(lastTrain.message)}</div>`;
+  const rows = (lastTrain.weights||[]).slice(0,8).map(w=>{
+    const d = w.is_new ? '<span class="pill">new</span>'
+      : w.delta > 0 ? `<span class="up">▲ ${w.delta.toFixed(2)}</span>`
+      : w.delta < 0 ? `<span class="down">▼ ${Math.abs(w.delta).toFixed(2)}</span>` : '';
+    return `<div class="wt"><span class="mono">${esc(w.feature)}</span>
+      <span><b class="mono">${w.multiplier.toFixed(2)}×</b> ${d}
+      <span style="color:var(--dim)"> ${w.accept}✓ ${w.dismiss}✗</span></span></div>`;
+  }).join('');
+  return `<div class="trained"><b>${esc(lastTrain.message)}</b>
+    <div style="margin-top:8px">${rows}</div>
+    <div class="meta" style="margin-top:8px">Scores below 1.00× are suppressed, above are boosted.
+      New suggestions are scored with these from now on.</div></div>`;
+}
+
+async function label(value){
+  const c = queue[cursor];
+  if(!c) return;
+  queue.splice(cursor, 1);                    // advance immediately
+  if(cursor >= queue.length) cursor = Math.max(0, queue.length-1);
+  renderTeach();
+  await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:c.id, value})});
+  load();
+}
+
+function skip(){ if(queue.length){ cursor = (cursor+1) % queue.length; renderTeach(); } }
+
+async function undo(){
+  const r = await (await fetch('/api/undo',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+  if(r.ok && r.undone) cursor = 0;
+  load();
+}
+
+async function train(){
+  if(busy) return;
+  busy = true; renderTrainBar();
+  try{
+    lastTrain = await (await fetch('/api/learn',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+  }catch(e){ lastTrain = {ok:false, message:String(e), weights:[]}; }
+  busy = false;
+  load();
+}
+
+document.addEventListener('keydown', e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey) return;
+  if(/^(input|textarea)$/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if(k==='y') label('accept');
+  else if(k==='n') label('dismiss');
+  else if(k==='m') label('not_mine');
+  else if(k==='u') undo();
+  else if(e.key==='ArrowRight') skip();
+  else return;
+  e.preventDefault();
+});
 
 async function judge(id, value){
   const el = document.getElementById('c-'+id);
@@ -425,6 +689,18 @@ class Handler(BaseHTTPRequestHandler):
             if cand:
                 write_feedback(cand, payload.get("value", "dismiss"))
             self._send(200, json.dumps({"ok": bool(cand)}).encode(), "application/json")
+
+        elif path == "/api/learn":
+            try:
+                self._send(200, json.dumps(run_learn()).encode(), "application/json")
+            except Exception as e:  # a failed train must not take the UI down
+                self._send(200, json.dumps({"ok": False, "message": str(e)[:200],
+                                            "weights": []}).encode(), "application/json")
+
+        elif path == "/api/undo":
+            row = undo_last_feedback()
+            self._send(200, json.dumps({"ok": row is not None,
+                                        "undone": row}).encode(), "application/json")
 
         elif path == "/api/reminder/channels":
             # channel edits go through the running Hammerspoon so its in-memory
