@@ -46,11 +46,18 @@ local function stackOffset()
 end
 
 -- opts: { title, body, icon, urgency = "info"|"warn"|"success",
---         duration, actions = { { label, fn }, ... }, onDismiss }
+--         duration, sticky, actions = { { label, fn }, ... }, onDismiss }
+--
+-- sticky = true: the card never times out and ignores clicks on its body —
+-- only an action button or the ✕ closes it. A fired reminder that vanishes on
+-- its own has failed at the one job it had, and the failure is invisible: you
+-- can't miss what you never saw. Guesses (suggestions) stay timed, because an
+-- offer that won't go away is nagging rather than helpful.
 function M.show(opts)
   opts = opts or {}
   local pal = palette()
   local W, pad = config.card.width, 14
+  local sticky = opts.sticky or (opts.duration ~= nil and opts.duration <= 0)
 
   local body = opts.body or ""
   if #body > 180 then body = body:sub(1, 177) .. "…" end
@@ -90,8 +97,17 @@ function M.show(opts)
   }
   c[#c + 1] = {
     type = "text", text = opts.title or "", textSize = 14, textColor = pal.title,
-    frame = { x = pad + 34, y = pad - 1, w = W - pad * 2 - 34, h = 20 },
+    -- leave room for the ✕ when there is one
+    frame = { x = pad + 34, y = pad - 1, w = W - pad * 2 - 34 - (sticky and 20 or 0), h = 20 },
   }
+  if sticky then
+    -- the only way to lose a sticky card without answering it
+    c[#c + 1] = {
+      id = "close", type = "text", text = "✕", textSize = 13,
+      textColor = pal.body, textAlignment = "center", trackMouseUp = true,
+      frame = { x = W - pad - 16, y = pad - 1, w = 18, h = 18 },
+    }
+  end
   c[#c + 1] = {
     type = "text", text = body, textSize = 12.5, textColor = pal.body,
     frame = { x = pad + 34, y = pad + 21, w = W - pad * 2 - 34, h = bodyH + 4 },
@@ -140,7 +156,7 @@ function M.show(opts)
       -- hover pins the card
       if card.timer then card.timer:stop(); card.timer = nil end
     elseif msg == "mouseExit" then
-      if not card.done and not card.timer then
+      if not sticky and not card.done and not card.timer then
         card.timer = hs.timer.doAfter(3, function() dismiss("card.timeout") end)
       end
     elseif msg == "mouseUp" then
@@ -149,7 +165,11 @@ function M.show(opts)
         log.append({ event = "card.action", label = a.label, title = opts.title })
         if a.fn then pcall(a.fn) end
         dismiss(nil)
-      elseif id == "bg" then
+      elseif id == "close" then
+        dismiss("card.closed")
+      elseif id == "bg" and not sticky then
+        -- a body click closes a passing card, but must not silently discard a
+        -- sticky one: answering it is the whole point
         dismiss("card.dismissed")
       end
     end
@@ -157,14 +177,21 @@ function M.show(opts)
 
   active[#active + 1] = card
   c:show(0.2)
-  card.timer = hs.timer.doAfter(opts.duration or config.card.duration,
-    function() dismiss("card.timeout") end)
+  if not sticky then
+    card.timer = hs.timer.doAfter(opts.duration or config.card.duration,
+      function() dismiss("card.timeout") end)
+  end
   return card
 end
 
 -- brief centered confirmation flash (e.g. echo after creating a reminder)
 function M.toast(text, secs)
   hs.alert.show(text, { radius = 10, textSize = 15 }, hs.screen.mainScreen(), secs or 1.6)
+end
+
+-- how many cards are on screen right now (smoke tests, `hs -c`, debugging)
+function M.activeCount()
+  return #active
 end
 
 function M.dismissAll()

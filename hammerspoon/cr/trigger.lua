@@ -28,10 +28,9 @@ local function cfg()
   return config.trigger
 end
 
-local function fire(r, snap, gate)
-  reminders.setState(r, "fired", gate)
-  log.append({ event = "trigger.fired", id = r.id, text = r.text, gate = gate })
-  local timed = gate == "time"
+-- The card for a fired reminder. Built separately from fire() so an unanswered
+-- reminder can be put back on screen without re-firing it.
+local function cardFor(r, timed)
   local actions = {
     {
       label = "Done",
@@ -67,14 +66,37 @@ local function fire(r, snap, gate)
       end,
     }
   end
-  notifier.notify({
+  return {
     title = "Reminder",
     body = r.text,
     icon = "⏰",
     urgency = "info",
+    sticky = true, -- waits for an answer; see cr.notify_ui
     meta = { id = r.id, referent = r.referent and r.referent.label },
     actions = actions,
-  }, { channels = r.channels }) -- nil falls back to config.defaultChannels
+  }
+end
+
+local function fire(r, snap, gate)
+  reminders.setState(r, "fired", gate)
+  log.append({ event = "trigger.fired", id = r.id, text = r.text, gate = gate })
+  notifier.notify(cardFor(r, gate == "time"), { channels = r.channels })
+end
+
+-- A sticky card only survives as long as the process drawing it. Hammerspoon
+-- reloads (and reboots), and the reminder underneath stays "fired" with
+-- nothing on screen — dismissed by accident rather than by the user. Put those
+-- back up on start. Local card only: the remote channels already delivered
+-- once, and re-pinging Discord on every reload would be its own bug.
+function M.restoreFired()
+  local n = 0
+  for _, r in ipairs(reminders.active()) do
+    if r.state == "fired" then
+      n = n + 1
+      notifier.notify(cardFor(r, r.dueAt ~= nil), { channels = { "card" } })
+    end
+  end
+  if n > 0 then log.append({ event = "trigger.restored", count = n }) end
 end
 
 -- Timed reminders bypass the FSM entirely: they fire on the clock, wherever

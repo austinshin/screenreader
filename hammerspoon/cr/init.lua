@@ -37,6 +37,7 @@ observer.start()
 trigger.start()
 menubar.start()
 trigger.onStateChange = menubar.refresh
+trigger.restoreFired()    -- unanswered reminders survive a reload
 screenText.onCapture = viewer.update
 screenText.restoreWatch() -- sticky ⌃⌥⌘W toggle survives reloads/reboots
 viewer.restore()          -- sticky ⌃⌥⌘V viewer panel

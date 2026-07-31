@@ -55,6 +55,7 @@ M.register("card", function(p)
   ui.show({
     title = p.title, body = p.body, icon = p.icon,
     urgency = p.urgency, actions = p.actions,
+    sticky = p.sticky, duration = p.duration,
   })
 end)
 
