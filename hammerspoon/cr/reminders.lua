@@ -47,6 +47,7 @@ end
 -- path — voice, hotkey, suggestion accept — understands time the same way.
 function M.add(text, snap, opts)
   opts = opts or {}
+  local original = text   -- kept verbatim for the decision log
   local clean, dueAt, phrase = timeparse.extract(text)
   dueAt = dueAt or opts.dueAt
   if phrase then text = clean end
@@ -81,6 +82,22 @@ function M.add(text, snap, opts)
   log.append({
     event = "reminder.created", id = r.id, text = text, via = opts.via,
     state = r.state, referent = ref.label, dueAt = dueAt, channels = r.channels,
+  })
+
+  -- the readable half: how the sentence became a time, or why it didn't
+  local why = require("cr.why")
+  why.note("reminder created", r.text, {
+    { "heard", string.format('"%s"  (%s)', original, opts.via or "?") },
+    { "created at", os.date("%I:%M:%S %p", r.createdAt):gsub("^0", "") },
+    dueAt
+      and { "time", string.format('matched "%s" → triggers %s',
+              phrase or "?", timeparse.fmtDue(dueAt)) }
+      or  { "time", "no time phrase found → this one waits on context, not the clock" },
+    dueAt
+      and { "place", "not used — a timed reminder fires wherever you are" }
+      or  { "place", "bound to " .. (ref.label or "?")
+              .. " · fires once you're done with it" },
+    { "delivery", table.concat(r.channels or { "card" }, " + ") },
   })
   return r
 end

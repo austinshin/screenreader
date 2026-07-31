@@ -77,10 +77,38 @@ local function cardFor(r, timed)
   }
 end
 
+-- Why this reminder is arriving at this moment, in the terms the user would
+-- use. The two paths have genuinely different answers: a clock reminder fires
+-- because a time arrived, a contextual one because it watched an activity end.
+local function whyNow(r, snap, gate)
+  if gate == "time" then
+    local late = os.time() - (r.dueAt or os.time())
+    return string.format("the time you set arrived (%s)%s",
+      os.date("%I:%M %p", r.dueAt or os.time()):gsub("^0", ""),
+      late > 2 and string.format(" — %ds later than set, checked once a second", late) or "")
+  end
+  local where = r.referent and r.referent.label or "?"
+  if gate == "max-wait" then
+    return string.format('you left "%s" and stayed away, and nothing interrupted for %ds — '
+      .. "fired rather than wait longer", where, cfg().maxReadyWait)
+  end
+  return string.format('you left "%s" and stayed away for %d checks (~%ds), then %s — '
+    .. "waited for that seam so this didn't land mid-task",
+    where, cfg().absentSamples, cfg().absentSamples * (config.pollInterval or 5),
+    gate == "wake" and "you came back from idle" or "you switched apps")
+end
+
 local function fire(r, snap, gate)
   reminders.setState(r, "fired", gate)
   log.append({ event = "trigger.fired", id = r.id, text = r.text, gate = gate })
-  notifier.notify(cardFor(r, gate == "time"), { channels = r.channels })
+  local channels = notifier.notify(cardFor(r, gate == "time"), { channels = r.channels })
+  require("cr.why").note("reminder fired", r.text, {
+    { "why now", whyNow(r, snap, gate) },
+    { "set", os.date("%I:%M %p", r.createdAt or os.time()):gsub("^0", "")
+        .. (r.whenPhrase and (' from "' .. r.whenPhrase .. '"') or "") },
+    { "delivered to", table.concat(channels or r.channels or { "card" }, " + ") },
+    { "waiting on", "you — the card stays up until you answer it" },
+  })
 end
 
 -- A sticky card only survives as long as the process drawing it. Hammerspoon
