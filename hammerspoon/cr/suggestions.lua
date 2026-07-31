@@ -243,6 +243,10 @@ end
 
 function M.start()
   if M.running then return end
+  if config.suggestions.enabled == false then
+    log.append({ event = "suggestions.disabled" })
+    return
+  end
   M.running = true
   seekToEnd()
   timer = hs.timer.doEvery(config.suggestions.pollInterval, function()

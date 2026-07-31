@@ -175,10 +175,17 @@ local function findRelative(t)
     if v and u then return os.time() + math.floor(v * u + u / 2), s2, e2 end
   end
 
-  local s3, e3, n3, unit3 = t:find("%f[%a]in%s+(%w+)%s+(%a+)")
-  if s3 then
-    local v, u = num(n3), UNIT_SECONDS[unit3]
-    if v and u then return os.time() + v * u, s3, e3 end
+  -- Speech pads numbers with hedges — "in like five minutes", "in about an
+  -- hour". Without these the phrase doesn't parse at all, which matters twice:
+  -- the reminder loses its time, and cr.voice can no longer use the time as
+  -- the end of the spoken command.
+  for _, filler in ipairs({ "", "like%s+", "about%s+", "around%s+", "roughly%s+",
+                            "maybe%s+", "just%s+" }) do
+    local s3, e3, n3, unit3 = t:find("%f[%a]in%s+" .. filler .. "(%w+)%s+(%a+)")
+    if s3 then
+      local v, u = num(n3), UNIT_SECONDS[unit3]
+      if v and u then return os.time() + v * u, s3, e3 end
+    end
   end
   return nil
 end

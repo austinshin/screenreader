@@ -85,8 +85,26 @@ if [ -x .venv/bin/python ]; then
 else
   bad "no venv — run: python3 -m venv .venv && .venv/bin/pip install anthropic"
 fi
-hs -c "return tostring(CR.suggestions.running)" 2>/dev/null | grep -q true \
-  && ok "suggestions watcher running" || bad "suggestions watcher stopped"
+# Capture is load-bearing: if getting a reminder in is flaky you never form
+# the habit, and the hypothesis this prototype exists to test never gets
+# exercised. Replays recorded transcripts, including the live-demo sequence
+# that once produced two reminders from one sentence.
+cap="$(hs -c 'return require("cr.test_capture").run()' 2>/dev/null | tail -1)"
+case "$cap" in
+  *"0 failed") ok "voice capture — $cap" ;;
+  "")          bad "voice capture tests did not run (Hammerspoon unreachable?)" ;;
+  *)           bad "voice capture — $cap" ;;
+esac
+
+# Screen inference is an opt-in experiment (config.suggestions.enabled).
+# Off is the shipped default, so "not running" is a pass, not a failure —
+# a red X for working-as-configured trains you to ignore the suite.
+if hs -c "return tostring(CR.config.suggestions.enabled ~= false)" 2>/dev/null | grep -q true; then
+  hs -c "return tostring(CR.suggestions.running)" 2>/dev/null | grep -q true \
+    && ok "suggestions watcher running" || bad "suggestions watcher stopped"
+else
+  ok "suggestions watcher off (experiment disabled in config — expected)"
+fi
 
 section "7. Logs"
 for f in "logs/events-$(date +%Y-%m-%d).jsonl" "logs/ocr-$(date +%Y-%m-%d).jsonl"; do

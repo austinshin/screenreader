@@ -21,6 +21,7 @@ local config = require("cr.config")
 local log = require("cr.log")
 local observer = require("cr.observer")
 local reminders = require("cr.reminders")
+local timeparse = require("cr.timeparse")
 local ui = require("cr.notify_ui")
 
 local M = { running = false }
@@ -122,13 +123,64 @@ function M._parse(line)
   return nil
 end
 
+-- Where a spoken command stops and the conversation resumes.
+--
+-- "remind me to X" has no terminator, so on a live call it captured the task
+-- *and the next forty seconds of talking*. Two rules, both cheap:
+--
+--   1. A time phrase ends the command. "…grocery list in five minutes ok
+--      because we're on a call…" — everything after "in five minutes" is
+--      drift. This is the strong signal, because someone who states a time is
+--      finished stating the task.
+--   2. Failing that, cap the length. Spoken reminders are short; a
+--      sixteen-word one is already unusual and a fifty-word one is a
+--      transcript, not a task.
+local function boundCommand(text)
+  local _, _, phrase = timeparse.extract(text)
+  if phrase then
+    local _, e = text:lower():find(phrase:lower(), 1, true)
+    if e then text = text:sub(1, e) end
+  end
+  local n, out = 0, {}
+  for w in text:gmatch("%S+") do
+    n = n + 1
+    if n > 16 then break end
+    out[#out + 1] = w
+  end
+  return (table.concat(out, " "):gsub("%s+$", ""))
+end
+
+-- Content words, for comparing two renderings of the same sentence.
+local function sig(s)
+  local set = {}
+  for w in norm(s):gmatch("%a+") do
+    if #w > 2 then set[w] = true end
+  end
+  return set
+end
+
+-- The recognizer revises as it goes: the second rendering of one utterance is
+-- not a prefix-extension of the first, it is an edit of it ("and it would" →
+-- "and then it would"). A prefix check misses that entirely, which is how one
+-- sentence became two reminders. Compare content instead.
+local function sameThing(a, b)
+  local sa, sb = sig(a), sig(b)
+  local na, nb, shared = 0, 0, 0
+  for w in pairs(sa) do na = na + 1; if sb[w] then shared = shared + 1 end end
+  for _ in pairs(sb) do nb = nb + 1 end
+  if na == 0 or nb == 0 then return false end
+  return shared / math.min(na, nb) >= 0.6
+end
+
 local function fire(text)
   local now = os.time()
-  -- Dupe guard: the same utterance keeps growing after we fire ("buy milk" →
-  -- "buy milk and eggs"), so inside the cooldown window we also skip any
-  -- candidate that extends what we just created.
+  text = boundCommand(text)
+  -- Dupe guard: within the cooldown, anything that is recognizably the same
+  -- sentence is the same reminder — whether it extends the last one or edits it.
   if now - lastFired.at < (cfg().cooldownSeconds or 8)
-      and text:sub(1, #lastFired.text) == lastFired.text then
+      and (text:sub(1, #lastFired.text) == lastFired.text
+           or sameThing(text, lastFired.text)) then
+    log.append({ event = "voice.duplicate_suppressed", text = text, prior = lastFired.text })
     return
   end
   lastFired = { text = text, at = now }
@@ -230,7 +282,24 @@ function M.start()
   M.running = true
   hs.settings.set("cr.voice", true) -- sticky: survives hs.reload() and reboots
   hs.fs.mkdir(logsDir())
-  io.open(transcriptPath(), "w"):close() -- truncate: old transcript is stale
+  -- Roll, don't wipe. This log was truncated on every start, so when a live
+  -- demo produced two reminders from one sentence the input that caused it was
+  -- already gone — the one bug class that most needs evidence had none. Keep a
+  -- bounded tail instead: recent enough to debug, bounded enough not to become
+  -- an archive of everything said near the machine.
+  local keep = {}
+  local rf = io.open(transcriptPath(), "r")
+  if rf then
+    for line in rf:lines() do keep[#keep + 1] = line end
+    rf:close()
+  end
+  local wf = io.open(transcriptPath(), "w")
+  if wf then
+    local from = math.max(1, #keep - 400)
+    for i = from, #keep do wf:write(keep[i], "\n") end
+    wf:write(os.date("--- session start %Y-%m-%d %H:%M:%S ---"), "\n")
+    wf:close()
+  end
   buf, offset, candidate = "", 0, nil
   if not writePlist() then
     ui.toast("voice: cannot write " .. plistPath(), 3)
@@ -265,6 +334,21 @@ function M.stop()
   os.remove(plistPath()) -- or launchd would resurrect it at next login
   log.append({ event = "voice.agent_stop" })
   ui.toast("🎙 voice off", 1.5)
+end
+
+-- Test seams. The settle timer is the only thing standing between _ingest and
+-- a reminder, and a test should not have to sleep through it.
+function M._settleNow()
+  if settleTimer then settleTimer:stop(); settleTimer = nil end
+  local c = candidate
+  candidate = nil
+  if c then fire(c) end
+end
+
+function M._resetForTest()
+  if settleTimer then settleTimer:stop(); settleTimer = nil end
+  candidate, buf = nil, ""
+  lastFired = { text = "", at = 0 }
 end
 
 function M.toggle()

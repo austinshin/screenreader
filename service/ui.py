@@ -532,9 +532,11 @@ function renderReminders(list){
       </div>
     </div>`;
   };
+  // screen-bound first: that's the trigger this project is about, and a
+  // clock reminder is the ordinary case you already have five apps for
   el.innerHTML =
-    (timed.length ? `<div class="grp">Scheduled</div>` + timed.map(row).join('') : '') +
-    (ctx.length ? `<div class="grp">Watching your screen</div>` + ctx.map(row).join('') : '');
+    (ctx.length ? `<div class="grp">Watching your screen</div>` + ctx.map(row).join('') : '') +
+    (timed.length ? `<div class="grp">Scheduled by time</div>` + timed.map(row).join('') : '');
 }
 
 // one plain-language line per reminder — no state-machine jargon

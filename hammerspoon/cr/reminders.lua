@@ -10,6 +10,7 @@ local log = require("cr.log")
 local matcher = require("cr.matcher")
 local observer = require("cr.observer")
 local timeparse = require("cr.timeparse")
+local condition = require("cr.condition")
 local ui = require("cr.notify_ui")
 
 local M = { items = {} }
@@ -48,6 +49,9 @@ end
 function M.add(text, snap, opts)
   opts = opts or {}
   local original = text   -- kept verbatim for the decision log
+  -- the trigger clause is not part of the task: strip it, keep it for the log
+  local body, cond = condition.extract(text)
+  if cond then text = body end
   local clean, dueAt, phrase = timeparse.extract(text)
   dueAt = dueAt or opts.dueAt
   if phrase then text = clean end
@@ -69,6 +73,7 @@ function M.add(text, snap, opts)
     referent = ref,
     dueAt = dueAt,            -- epoch; nil for purely contextual reminders
     whenPhrase = phrase,      -- the words the time came from, verbatim
+    condPhrase = cond,        -- the words the screen condition came from
     channels = opts.channels or { "card" }, -- default: notification on this Mac
     via = opts.via,
     -- timed reminders fire on the clock; deictic ones are usually born ARMED
@@ -93,6 +98,8 @@ function M.add(text, snap, opts)
       and { "time", string.format('matched "%s" → triggers %s',
               phrase or "?", timeparse.fmtDue(dueAt)) }
       or  { "time", "no time phrase found → this one waits on context, not the clock" },
+    cond and { "condition", string.format('you said "%s" → resolved to what was on screen: %s',
+      cond, ref.label or "?") } or nil,
     dueAt
       and { "place", "not used — a timed reminder fires wherever you are" }
       or  { "place", "bound to " .. (ref.label or "?")

@@ -28,8 +28,13 @@ local M = {
     },
   },
 
-  -- suggestion lanes (candidates from service/extract.py)
+  -- Suggestion lanes (candidates from service/extract.py).
+  -- OFF by default: inferring *what* to remind you about is a different
+  -- problem from surfacing a reminder you stated, it is much noisier, and the
+  -- brief asked for the latter. Kept because the gate work is the most
+  -- interesting part of the project — turn on with cr.suggestions.enabled.
   suggestions = {
+    enabled        = false,
     pollInterval   = 10,   -- seconds between checks of data/candidates.jsonl
     fireThreshold  = 0.55, -- >= interrupt with a card
     inboxThreshold = 0.30, -- >= silent menu-bar inbox (enforced service-side)
@@ -55,8 +60,12 @@ local M = {
   -- voice wake phrase ("hey wispr, remind me to …" — sticky ⌃⌥⌘M toggle)
   voice = {
     binary          = "/opt/homebrew/bin/hear",
-    settleSeconds   = 1.5, -- utterance must stop changing this long before firing
-    cooldownSeconds = 8,   -- ignore repeats/extensions of the last capture
+    -- Utterance must stop changing this long before firing. 1.5s fired
+    -- mid-sentence on a live call and captured the conversation that
+    -- followed; a person finishing a command pauses longer than a person
+    -- drawing breath mid-thought.
+    settleSeconds   = 2.5,
+    cooldownSeconds = 12,  -- ignore repeats/edits of the last capture
   },
 
   -- browsers we can ask for the active tab (bundle id → applescript dialect)
