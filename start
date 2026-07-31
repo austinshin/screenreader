@@ -49,6 +49,18 @@ stop_one() {
   fi
 }
 
+# An extractor started by hand in another terminal has no pidfile here, so a
+# naive `./start` launches a second one. Two of them double the API spend and
+# race on data/extract_state.json — the cursor and dedupe keys both live there,
+# so a lost write means re-reading captures or re-surfacing candidates.
+adopt_extractor() {
+  local pid
+  pid="$(pgrep -f 'service/extract\.py --watch' | grep -v "$(cat "$EX_PID" 2>/dev/null || echo 0)" | head -1)"
+  [[ -z "$pid" ]] && return 1
+  echo "  extractor: already running outside this script (pid $pid) — leaving it alone"
+  return 0
+}
+
 # A dashboard listener we didn't start (old shell, stale pidfile) blocks the
 # port — restart it under our management so `./start` always serves fresh code.
 reclaim_port() {
@@ -89,13 +101,13 @@ case "${1:-up}" in
     [[ -n "$ANTHROPIC_API_KEY" ]] || echo "  ⚠ no ANTHROPIC_API_KEY (env or Keychain) — extractor falls back to regex rules"
     reclaim_port
     start_one dashboard "$UI_PID" "$PY" service/ui.py
-    start_one extractor "$EX_PID" "$PY" service/extract.py --watch
+    adopt_extractor || start_one extractor "$EX_PID" "$PY" service/extract.py --watch
     hs -c "return 'ok'" >/dev/null 2>&1 || echo "  ⚠ Hammerspoon not reachable — open Hammerspoon.app"
     pgrep -x hear >/dev/null && echo '  voice: on — try "hey wispr, remind me to stretch in 2 minutes"' \
                              || echo "  voice: off — toggle with ⌃⌥⌘M"
     echo
     echo "  dashboard → http://localhost:$PORT"
-    echo "  hotkey    → fn⇧⌘N (works with time too: \"… in 5 minutes\", \"… at 3pm\")"
+    echo "  hotkey    → ⌃⌥⌘N (works with time too: \"… in 5 minutes\", \"… at 3pm\")"
     ;;
   *)
     echo "usage: ./start [status|stop|restart]"
