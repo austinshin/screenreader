@@ -152,6 +152,26 @@ NOISE = re.compile(
 
 EXPLICIT = re.compile(r"\b(remind me|note to self|don'?t forget|todo:|to-?do:)\b", re.I)
 
+# Text *about* reminders is not a reminder. Documentation, specs, and this
+# project's own notes quote "remind me to X" constantly — and the explicit
+# bypass below originally ignored provenance entirely, so every one of those
+# quotes scored 0.90 and carded. On a full-corpus run that single hole
+# accounted for essentially all of the LLM backend's output.
+#
+# The tell is always the same: an *instance* of intent is stated plainly,
+# whereas a *mention* of intent is quoted, templated, or bulleted.
+MENTION = re.compile(
+    r"""(
+      ["“”'].{0,40}\bremind\ me|      # "remind me …"  — quoted example
+      \bremind\ me\b.{0,40}["“”']|    # … remind me …" — closing quote
+      <[a-z_ ]+>|                     # <feature> <topic> <channel> placeholders
+      ^\s*[•\-*]\s*["“”']|            # bulleted quotation
+      \b(?:e\.g\.|for\ example|such\ as|like\ this|instead\ of)\b|
+      \b(?:strings?|literal|pattern|regex|keyword|phrase)\b
+    )""",
+    re.I | re.X,
+)
+
 
 def gate(text: str, source: str = "") -> list[str]:
     """Return the lines worth spending an extractor call on.
@@ -173,9 +193,10 @@ def gate(text: str, source: str = "") -> list[str]:
         if NOISE.match(line) or STRUCTURAL.match(line) or SELF_REF.search(line):
             continue
 
-        explicit = EXPLICIT.search(line)
-        if explicit:
-            keep.append(line)  # explicit intent always passes, any surface
+        if MENTION.search(line):
+            continue  # a *mention* of intent (quoted, templated), not an instance
+        if EXPLICIT.search(line):
+            keep.append(line)  # a plain statement of intent passes on any surface
             continue
         if policy != "full":
             continue  # non-conversational surface needs explicit intent
