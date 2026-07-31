@@ -45,18 +45,16 @@ suggestions.onChange = menubar.refresh
 voice.restore()           -- sticky ⌃⌥⌘M voice wake phrase ("hey wispr…")
 
 -- hotkeys (⌃⌥⌘ layer; alt+space stays with the file opener)
--- fn⇧⌘N via eventtap: hs.hotkey uses Carbon RegisterEventHotKey, which silently
--- drops the fn modifier (the binding would register — and capture — plain ⌘⇧N).
-M.fnTap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function(e)
-  local f = e:getFlags()
-  if f.fn and f.cmd and f.shift and not f.alt and not f.ctrl
-      and e:getKeyCode() == hs.keycodes.map.n then
-    reminders.promptNew()
-    return true -- swallow the keystroke
-  end
-  return false
-end)
-M.fnTap:start() -- retained on M: unreferenced eventtaps are garbage-collected
+-- ⌃⌥⌘N, NOT fn⇧⌘N. Supporting fn means an hs.eventtap, and an eventtap puts a
+-- Lua callback in the path of every keystroke on the system. Hammerspoon is
+-- single-threaded, and this config blocks that thread routinely — an
+-- AppleScript tab query measured at 85ms, window snapshots for OCR, a
+-- 25k-file re-index. While it's blocked the tap can't service key events, so
+-- macOS delays or drops them (and disables a tap that answers too slowly).
+-- The symptom is dropped keystrokes while typing anywhere, which is a far
+-- worse bug than an unavailable modifier. Carbon hotkeys cost nothing until
+-- pressed, so this stays on the same ⌃⌥⌘ layer as everything else.
+hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "n", reminders.promptNew)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "t", notifier.test)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "c", menubar.showCurrentContext)
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "s", screenText.demo)
@@ -72,6 +70,6 @@ M.viewer, M.suggestions, M.voice = viewer, suggestions, voice
 CR = M
 
 print("[cr] Contextual Reminders loaded — project: " .. tostring(projectDir))
-print("[cr] hotkeys: fn⇧⌘N reminder · 🎙 \"hey wispr, remind me to …\" (⌃⌥⌘M) · ⌃⌥⌘S OCR · ⌃⌥⌘W watch · ⌃⌥⌘V viewer · ⌃⌥⌘T test · ⌃⌥⌘C context")
+print("[cr] hotkeys: ⌃⌥⌘N reminder · 🎙 \"hey wispr, remind me to …\" (⌃⌥⌘M) · ⌃⌥⌘S OCR · ⌃⌥⌘W watch · ⌃⌥⌘V viewer · ⌃⌥⌘T test · ⌃⌥⌘C context")
 
 return M
