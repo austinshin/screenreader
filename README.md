@@ -114,12 +114,6 @@ The gate is where the real work is. The first version treated a clock time as ev
 
 The fix was to strip chat chrome before judging anything, which hands you the signal that actually answers the question — **whose obligation is this?**
 
-```
-Saujas: make sure to open a PR   →  someone assigning you work    KEEP
-Link:   I'll send the demo       →  you committing                KEEP
-Megan:  I'll handle the deploy   →  somebody else's task          DROP
-Link:   can you review my PR?    →  you assigning someone else    DROP
-```
 
 Measured, not asserted: `python3 service/test_gate.py` — 26 labeled lines, F1 0.76 → 1.00. Then replayed over a full day of real captures (45,008 lines → 98 kept), which is what surfaced two bugs the synthetic tests missed.
 
