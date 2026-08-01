@@ -35,7 +35,9 @@ The brief's own phrasings work as written, with the condition split from the tas
 
 Add a time instead (*"in 5 minutes"*, *"at 130"*, *"at 5pm august 1"*) and it becomes an ordinary scheduled reminder. Both exist; screen-bound is the interesting one.
 
-**Output** — a card that waits for an answer (Done / Snooze / Too early) rather than timing out, since a reminder that dismisses itself has failed invisibly. Delivery defaults to a local card; per reminder you can route it to Notification Center, Discord, Slack, or a webhook from the dashboard.
+**Output** — a card that waits for an answer (**Done · 5 min · Snooze**) rather than timing out, since a reminder that dismisses itself has failed invisibly. Delivery defaults to a local card; per reminder you can route it to Notification Center, Discord, Slack, or a webhook from the dashboard.
+
+**At a glance** — `command+option+shift+R` puts every reminder in a corner panel. The dashboard is a browser tab: fine for reviewing, useless for the question you actually ask twenty times a day mid-task.
 
 ---
 
@@ -55,9 +57,24 @@ Three deliberate properties:
 
 - **Debounced.** A glance at Slack and back isn't "done" — six consecutive absent samples (~30s) before it counts.
 - **Gated on a seam.** Even when READY it waits for an app switch or your return from idle, so a reminder never lands mid-sentence. A max-wait backstop stops it sitting there forever.
-- **Reversible.** Come back to the thing and it re-arms. "Too early" on the card sends it all the way back to PENDING — that button is the only signal that the system was wrong about you, and nothing else can provide it.
+- **Reversible.** Come back to the thing and it re-arms — which is also the most common reason a reminder *seems* stuck: every return resets the counter, and the system looks identical whether it's one check from firing or endlessly resetting.
 
 **What "this" means** is resolved per surface: a browser tab is identified by URL (video IDs normalized, so seeking or a title change doesn't break the binding); everything else by app + normalized window title. With `media-control` installed, a video still playing in a background tab counts as *not done*.
+
+---
+
+## How loudly it speaks
+
+"When to surface" turned out to be only half the question. The other half is *how loudly* — one delivery style for four kinds of thing means either the alerts are too quiet or the trivia is too loud, and after a week you read none of them.
+
+| Tier | Interrupts? | Inferred from |
+|---|---|---|
+| **Critical** | immediately — the only tier that skips the seam gate | "before it closes", "urgent", "deadline" |
+| **Upcoming** | at a natural break | "don't forget", or a commitment to a person |
+| **In context** | when you're done with the thing | a screen binding |
+| **Ambient** | **never** — dashboard and menu bar only | "keep an eye on", "at some point" |
+
+The tier isn't a label, it's a **function that gets recomputed**. "Take out the trash" is ambient at 2pm, upcoming at 7pm, and critical the night before collection — nothing about it changed except distance from consequence. Every move is logged with its reason.
 
 ---
 
@@ -91,12 +108,18 @@ A tool that acts on its own reading of your screen should be able to say why, wi
 
 Reading the screen to *infer what to remind you about* — as opposed to *when to surface what you said* — is **off by default** (`config.suggestions.enabled`). It's the most technically interesting part and the least product-ready, and the brief didn't ask for it.
 
-The pipeline: full-screen OCR (~45,000 lines/day) → a cheap gate → Claude for extraction → a learned scoring layer with a labeling UI.
+The pipeline: full-screen OCR (~45,000 lines/day) → a cheap gate → an extractor → a learned scoring layer with a labeling UI. Three interchangeable extractors: regex rules, Claude, or **any local Ollama model** — the gate drops ~99.8% of lines, so only ~100 a day reach it, which is what makes a 3B model on-device viable.
 
 The gate is where the real work is. The first version treated a clock time as evidence of a commitment — but **in a chat app every line has a timestamp, so a timestamp carries zero information**. It was dropping *"hey make sure to create a PR"* while keeping *"so if like u were to tell me"*.
 
 The fix was to strip chat chrome before judging anything, which hands you the signal that actually answers the question — **whose obligation is this?**
 
+```
+Saujas: make sure to open a PR   →  someone assigning you work    KEEP
+Link:   I'll send the demo       →  you committing                KEEP
+Megan:  I'll handle the deploy   →  somebody else's task          DROP
+Link:   can you review my PR?    →  you assigning someone else    DROP
+```
 
 Measured, not asserted: `python3 service/test_gate.py` — 26 labeled lines, F1 0.76 → 1.00. Then replayed over a full day of real captures (45,008 lines → 98 kept), which is what surfaced two bugs the synthetic tests missed.
 
@@ -113,19 +136,26 @@ The brief's middle example, generalized: *"remind me about X once I'm done with 
 Sensing first, since everything depends on knowing what's on screen; then the state machine, since that's where "done" is actually defined; then delivery; then the inference experiment. Most of the *thinking* went into the FSM — edge-triggered, debounced, seam-gated, three properties that each came from a specific way the naive version was wrong — and into the gate's precision. Most of the *debugging* went into things that only appear in real use: a keyboard tap that dropped keystrokes system-wide, a scoring bug that silently zeroed every candidate, speaker names with spaces attributing everyone's words to me.
 
 **3. Did I use it organically?**
-Yes, and it changed the project twice. Using it is how I found reminders firing seconds after being set — the time parser was failing silently and falling back to a *contextual* reminder, so "1:30 tomorrow" became "four seconds from now." It's also how I learned a 40-item suggestion inbox is unusable, and that cards timing out meant I missed them. What I'd try next: binding to a **person or thread** rather than a window, since "when I wrap up this conversation" is really about the conversation, not the app.
+Yes, and every significant correction came from use rather than planning. Reminders were firing *seconds* after being set — the time parser failed silently on "at 130" and fell back to a contextual reminder, so "1:30 tomorrow" became "four seconds from now." One sentence created two reminders during a live demo, which turned out to be three separate capture bugs. A 40-item suggestion inbox is unusable. Cards that time out get missed. And I built the reminder hotkey as a system-wide keyboard tap to support `fn`, which **dropped keystrokes while typing anywhere on the machine** — a modifier you can't have is a smaller problem than a keyboard that doesn't work.
+
+What I'd try next: binding to a **person or thread** rather than a window, since "when I wrap up this conversation" is really about the conversation, not the app. Then surfacing *why* a reminder hasn't fired yet — right now a reminder one check from firing looks identical to one that keeps resetting, which is the kind of invisible state that quietly costs trust.
 
 **4. Where did I trade quality for velocity? What had to stay robust?**
-Traded: the dashboard is one Python file with an HTML string in it, no build step, no tests; the OCR→candidate pipeline has no schema versioning; suggestion dedupe is lexical (Jaccard + containment) where it wants embeddings. Kept robust: the **trigger FSM** (driven by synthetic snapshots so `./smoke-test.sh` tests it without waiting on wall-clock), the **gate** (labeled eval + real-capture replay), and **persistence** (reminders survive reload and reboot; unanswered cards are restored on start). The rule: anything that can silently lose a reminder gets tests, anything cosmetic doesn't.
+Traded: the dashboard is one Python file with an HTML string in it, no build step, no tests; the OCR→candidate pipeline has no schema versioning; suggestion dedupe is lexical (Jaccard + containment) where it wants embeddings. Kept robust: **capture** (`cr.test_capture` replays recorded transcripts, including the exact demo failure), the **trigger FSM** (driven by synthetic snapshots so `./smoke-test.sh` tests it without waiting on wall-clock), the **gate** (labeled eval + real-capture replay), and **persistence** (reminders survive reload and reboot; unanswered cards are restored on start).
+
+The rule I settled on: **anything that can silently lose a reminder gets tests; anything cosmetic doesn't.** Silent failure is the whole risk class — a reminder that vanishes without telling you is worse than one that errors, because you can't notice the absence of something you never saw. Capture earns tests despite being the least interesting code here: it isn't the hypothesis, but if getting a reminder *in* is flaky you never form the habit, never use it daily, and never get to test the hypothesis at all.
 
 ---
 
 ## Verify
 
 ```sh
-./smoke-test.sh                 # seven layers in ~20s, nonzero exit on failure
-python3 service/test_gate.py    # the gate eval
-./start                         # dashboard → http://localhost:8765
+./smoke-test.sh                              # seven layers in ~20s, nonzero exit on failure
+python3 service/test_gate.py                 # the gate eval
+hs -c 'require("cr.test_capture").run()'     # voice capture, on recorded transcripts
+./start                                      # dashboard → http://localhost:8765
 ```
 
-`control+option+command+K` shows the hotkey cheatsheet — drag it anywhere, it remembers where.
+`control+option+command+K` shows the hotkey cheatsheet — drag it anywhere, it remembers where. Every shortcut is editable from the dashboard's **Settings** tab.
+
+When something behaves oddly, read `logs/decisions-*.md` first: it says *why*, in English.
