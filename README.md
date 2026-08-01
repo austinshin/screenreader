@@ -10,7 +10,8 @@ control+option+command+N  →  "reply to this thread once I'm done here"
 
 No clock. The trigger is *"you finished the thing you were looking at."*
 
-**Setup:** `./setup.sh` — then [RUNNING.md](RUNNING.md) for daily use, config, and debugging.
+**Setup:** [INSTALL.md](INSTALL.md) — or just `./setup.sh`. 
+**Daily use, config, debugging:** [RUNNING.md](RUNNING.md). **Code walkthrough:** [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
