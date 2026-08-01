@@ -618,32 +618,6 @@ function renderReminders(list){
     return;
   }
 
-  // Provenance before state. The first question about a reminder you didn't
-  // expect is always "when did I ask for this?" — so that line comes first,
-  // then why it's timed/bound, then what happens next in a full sentence.
-  const lines = r => {
-    const out = [];
-    const made = r.createdAt
-      ? new Date(r.createdAt*1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})
-      : null;
-    if(made) out.push(`you said this at ${made}${r.via ? ', by ' + esc(r.via) : ''}`);
-    if(r.whenPhrase) out.push(`you said “${esc(r.whenPhrase)}” → ${esc(fmtDue(r.dueAt))}`);
-    if(r.condPhrase) out.push(`you said “${esc(r.condPhrase)}”`);
-    const place = r.referent && r.referent.label;
-    if(place && place !== 'anywhere'){
-      // A binding is only a trigger for contextual reminders. On a timed one
-      // the window is just where you were standing — labelling both with the
-      // same pin taught you to distrust the pin.
-      out.push(r.dueAt
-        ? `set while you were in ${esc(place)} <span class="dim">(not a trigger)</span>`
-        : `while you were in ${esc(place)}`);
-    }
-    // No line here for "surfaces when you're done" — the group header above
-    // already says exactly that, and a row that restates its own heading is
-    // three sentences to learn one fact.
-    return out;
-  };
-
   const row = r => {
     const rail = railFor(r);
     const t = r.tier || 2;
@@ -653,7 +627,6 @@ function renderReminders(list){
       </div>
       <div class="body">
         <div class="t">${esc(r.text)}</div>
-        ${lines(r).map(l=>`<div class="prov">↳ ${l}</div>`).join('')}
         <div class="chips">${chipRow(r)}</div>
       </div>
       <div class="acts">
