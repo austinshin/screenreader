@@ -198,22 +198,13 @@ end
 function M.promptNew()
   local snap = observer.current
 
-  -- One short line, not a manual. The dialog exists to take a sentence; every
-  -- word of explanation above the field is a word between you and typing it.
-  -- What survives is the one fact you can't work out yourself — which window
-  -- this will attach to — and the app name alone carries that. The long title
-  -- goes in the confirmation card instead, where reading it costs nothing.
-  local where = snap and (snap.app or "?") or nil
-  local detail = snap and (snap.tab or snap.title or snap.url) or nil
-  if detail and #detail > 44 then detail = detail:sub(1, 41) .. "…" end
-
-  local message
-  if where then
-    message = "Fires when you're done with " .. where
-      .. (detail and ("\n" .. detail) or "")
-  else
-    message = "Nothing on screen to attach it to — add a time instead."
-  end
+  -- Just the question. Nothing about what it's binding to, because that answer
+  -- arrives a second later on the confirmation card, where reading it is free —
+  -- and putting it here made you read a window title before you could type.
+  -- The only case worth a word is having nothing to bind to at all, since then
+  -- what you type has to change.
+  local message = snap and ""
+    or "Nothing on screen to attach this to — include a time."
 
   local button, text = hs.dialog.textPrompt(
     "What do you want to be reminded of?",
