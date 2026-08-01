@@ -344,7 +344,17 @@ function M.start()
     wf:write(os.date("--- session start %Y-%m-%d %H:%M:%S ---"), "\n")
     wf:close()
   end
-  buf, offset, candidate = "", 0, nil
+  -- Start reading AFTER everything already in the file. The kept tail exists so
+  -- a human can read what was heard; it is not input. Reading from 0 replays
+  -- it through the parser and re-creates every reminder it contains, once per
+  -- restart — which is exactly what happened when this rotation was added, and
+  -- it looked like the recognizer inventing duplicates rather than a cursor
+  -- pointing at the wrong place.
+  buf, candidate = "", nil
+  local at = io.open(transcriptPath(), "r")
+  offset = at and at:seek("end") or 0
+  if at then at:close() end
+
   if not writePlist() then
     ui.toast("voice: cannot write " .. plistPath(), 3)
     M.running = false
