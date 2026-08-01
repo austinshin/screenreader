@@ -197,12 +197,27 @@ end
 -- must never become "this".
 function M.promptNew()
   local snap = observer.current
-  local boundTo = snap
-    and ((snap.app or "?") .. " — " .. (snap.tab or snap.title or snap.url or "untitled"))
-    or "nothing (observer has no context yet)"
+
+  -- One short line, not a manual. The dialog exists to take a sentence; every
+  -- word of explanation above the field is a word between you and typing it.
+  -- What survives is the one fact you can't work out yourself — which window
+  -- this will attach to — and the app name alone carries that. The long title
+  -- goes in the confirmation card instead, where reading it costs nothing.
+  local where = snap and (snap.app or "?") or nil
+  local detail = snap and (snap.tab or snap.title or snap.url) or nil
+  if detail and #detail > 44 then detail = detail:sub(1, 41) .. "…" end
+
+  local message
+  if where then
+    message = "Fires when you're done with " .. where
+      .. (detail and ("\n" .. detail) or "")
+  else
+    message = "Nothing on screen to attach it to — add a time instead."
+  end
+
   local button, text = hs.dialog.textPrompt(
-    "New contextual reminder",
-    'Fires when you\'re done with THIS — or add a time ("… in 5 minutes", "… at 3pm").\n\nTHIS = ' .. boundTo,
+    "What do you want to be reminded of?",
+    message,
     "", "Remind me", "Cancel")
   if button ~= "Remind me" or not text or text == "" then return end
   local r = M.add(text, snap, { via = "hotkey" })
