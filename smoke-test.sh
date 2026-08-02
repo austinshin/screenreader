@@ -64,6 +64,16 @@ return trace
   && ok "FSM: $fsm" \
   || bad "FSM unexpected: $fsm (wanted armed>cooldown>armed>ready>fired)"
 
+# The time parser fails *silently* (no time found → contextual reminder), so a
+# regression here is invisible in normal use — "at 130" once became "four
+# seconds from now" this way, and "today" once crashed extraction outright.
+tp="$(hs -c 'return require("cr.test_timeparse").run()' 2>/dev/null | tail -1)"
+case "$tp" in
+  *"0 failed") ok "time parser — $tp" ;;
+  "")          bad "time parser tests did not run (Hammerspoon unreachable?)" ;;
+  *)           bad "time parser — $tp" ;;
+esac
+
 section "5. Notification delivery"
 hs -c "CR.notifier.test(); return 'sent'" >/dev/null 2>&1 \
   && ok "test card dispatched (look at your top-right)" \

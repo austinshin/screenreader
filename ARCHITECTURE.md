@@ -104,26 +104,27 @@ Channels receive **two** arguments, `(payload, note)`. The payload carries Lua c
 
 | File | Lines | What it owns |
 |---|--:|---|
-| `init.lua` | 89 | Load order, wires handlers into the hotkey registry, exposes `CR` global for `hs -c` |
-| `config.lua` | 85 | Every tunable. Read at call time, so edit + reload takes effect immediately |
+| `init.lua` | 104 | Load order, wires handlers into the hotkey registry, exposes `CR` global for `hs -c` |
+| `config.lua` | 101 | Every tunable. Read at call time, so edit + reload takes effect immediately |
 | `observer.lua` | 196 | Samples context every 5s: app, window title, browser tab (AppleScript), media, idle. Publishes to subscribers |
 | `matcher.lua` | 94 | What "this" means. `bind()` makes a referent; `matches()` tests presence. URL-keyed for browsers (video IDs normalized), title-keyed otherwise |
-| `reminders.lua` | 278 | The store. `add` (the funnel), `waiting` (why it hasn't fired), `confirm`, `describe`, `setState`, `promptNew` |
-| `trigger.lua` | 344 | The FSM, `retier`, `checkDue`, `fire`, `onCapture` (content conditions), `restoreFired` |
-| `tier.lua` | 109 | Attention tiers 1–4 from language + binding. `bypassesSeamGate` is the load-bearing rule |
-| `timeparse.lua` | 264 | Date and time out of text. Independent halves, combined — see below |
+| `reminders.lua` | 284 | The store. `add` (the funnel), `waiting` (why it hasn't fired), `confirm`, `describe`, `setState`, `promptNew` |
+| `trigger.lua` | 348 | The FSM, `retier`, `checkDue`, `fire`, `onCapture` (content conditions), `restoreFired` |
+| `tier.lua` | 107 | Attention tiers 1–4 from language + binding. `bypassesSeamGate` is the load-bearing rule |
+| `timeparse.lua` | 293 | Date and time out of text. Independent halves, combined — see below |
 | `condition.lua` | 76 | Splits "…after I finish watching this" from the task |
 | `notifier.lua` | 215 | Channel registry + presence routing. Channels get `(payload, note)` |
 | `notify_ui.lua` | 218 | The canvas card |
-| `listening.lua` | 153 | Live transcription HUD (listening → capturing → created) |
-| `dictate.lua` | 398 | **Push-to-talk.** Record → whisper → `_clean` → reminder. The default capture path |
+| `listening.lua` | 180 | Live transcription HUD (listening → capturing → created) |
+| `dictate.lua` | 399 | **Push-to-talk.** Record → whisper → `_clean` → reminder. The default capture path |
 | `capture.lua` | 104 | Which voice path is live: one tri-state (`ptt`\|`wake`\|`off`), so "both" is unrepresentable |
 | `notification.lua` | 124 | Builds the `cr.notification/v1` object every channel receives |
 | `watchfor.lua` | 165 | Conditions about the *world* ("after the tests run") — OCR text, still edge-triggered |
 | `voice.lua` | 433 | The older wake-word path: launchd agent, transcript tailing, debounce, dupe guard |
-| `hotkeys.lua` | 190 | **One registry** for every binding; user overrides in `data/hotkeys.json`. Handlers may be a fn (tap) or `{pressed, released}` (hold) |
-| `keys.lua` | 257 | The draggable cheatsheet. Reads `hotkeys.list()` — never its own copy |
-| `menubar.lua` | 149 | Status icon and menu |
+| `hotkeys.lua` | 195 | **One registry** for every binding; user overrides in `data/hotkeys.json`. Handlers may be a fn (tap) or `{pressed, released}` (hold) |
+| `keys.lua` | 259 | The draggable cheatsheet. Reads `hotkeys.list()` — never its own copy |
+| `glance.lua` | 252 | ⌘⌥⇧R corner panel: every reminder and why it hasn't fired yet. Read-only |
+| `menubar.lua` | 156 | Status icon and menu |
 | `screen_text.lua` | 256 | OCR: window snapshot → `bin/cr-ocr` (Apple Vision) → JSONL |
 | `viewer.lua` | 174 | Panel showing what OCR actually read |
 | `suggestions.lua` | 270 | Consumes `candidates.jsonl`. **Off by default** |
@@ -131,13 +132,14 @@ Channels receive **two** arguments, `(payload, note)`. The payload carries Lua c
 | `log.lua` | — | JSONL event append |
 | `test_capture.lua` | 99 | Replays recorded `hear` transcripts. `hs -c 'require("cr.test_capture").run()'` |
 | `test_dictate.lua` | 115 | Replays real whisper output through `_clean`. `hs -c 'require("cr.test_dictate").run()'` |
+| `test_timeparse.lua` | 168 | Phrasings through the time parser — the silent-failure module. `hs -c 'require("cr.test_timeparse").run()'` |
 
 ### Python — `service/`
 
 | File | Lines | What it owns |
 |---|--:|---|
-| `ui.py` | 1165 | The whole dashboard: `snapshot()` builds state, `PAGE` is the HTML/CSS/JS string, `Handler` is the routes |
-| `extract.py` | 854 | OCR → candidates. The gate, the extractors, the learning layer |
+| `ui.py` | 1234 | The whole dashboard: `snapshot()` builds state, `PAGE` is the HTML/CSS/JS string, `Handler` is the routes |
+| `extract.py` | 1010 | OCR → candidates. The gate, the extractors (rules \| claude \| local Ollama), the learning layer |
 | `test_gate.py` | 119 | Labeled gate eval. `python3 service/test_gate.py` |
 
 ### Swift — compiled by `setup.sh` into `bin/`
@@ -204,8 +206,9 @@ No build step; `python3 service/ui.py` is the whole deployment. `PAGE` is a raw 
 ## Verifying a change
 
 ```sh
-./smoke-test.sh                                  # seven layers, ~20s
+./smoke-test.sh                                  # eight layers, ~30s
 python3 service/test_gate.py                     # gate precision/recall
+hs -c 'require("cr.test_timeparse").run()'       # time parser
 hs -c 'require("cr.test_dictate").run()'         # push-to-talk parser
 hs -c 'require("cr.test_capture").run()'         # the older wake-word path
 luac -p hammerspoon/cr/*.lua                     # Lua syntax

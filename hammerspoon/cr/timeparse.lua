@@ -74,8 +74,13 @@ end
 local function findDate(t)
   local best
 
-  local function consider(s, e, y, m, d)
-    if s and (not best or s < best.s) then best = { s = s, e = e, y = y, m = m, d = d } end
+  -- flags: sameday = "today"/"tonight" (the date is today by definition, so a
+  -- past default time must not roll to next year); night = default to evening
+  local function consider(s, e, y, m, d, flags)
+    if s and (not best or s < best.s) then
+      best = { s = s, e = e, y = y, m = m, d = d,
+               sameday = flags and flags.sameday, night = flags and flags.night }
+    end
   end
 
   local now = os.date("*t")
@@ -101,8 +106,20 @@ local function findDate(t)
     local n = os.date("*t", os.time() + 86400)
     consider(s3, e3, n.year, n.month, n.day)
   end
-  local s4, e4 = t:find("%f[%a]toda?y?%f[%A]") or t:find("%f[%a]tonight%f[%A]")
-  if s4 then consider(s4, e4, now.year, now.month, now.day) end
+  -- Two separate finds, never `find(a) or find(b)`: `or` truncates a
+  -- multi-value expression to ONE value, so the end index came back nil and
+  -- cut() crashed on it — "buy milk today" silently created nothing. Same
+  -- family as the "(on|at|by|in)$" bug above: Lua patterns and Lua operators
+  -- both look like they compose the way regexes do, and both don't.
+  local s4, e4 = t:find("%f[%a]toda?y?%f[%A]")
+  if s4 then
+    consider(s4, e4, now.year, now.month, now.day, { sameday = true })
+  else
+    s4, e4 = t:find("%f[%a]tonight%f[%A]")
+    if s4 then
+      consider(s4, e4, now.year, now.month, now.day, { sameday = true, night = true })
+    end
+  end
 
   -- "on monday", "next friday" — the coming occurrence
   for name, wd in pairs(WEEKDAYS) do
@@ -209,7 +226,8 @@ function M.extract(text)
     year  = date and (date.y or now.year) or now.year,
     month = date and date.m or now.month,
     day   = date and date.d or now.day,
-    hour  = time and time.hour or 9,   -- a date with no time means 9am
+    -- a date with no time means 9am; "tonight" with no time means 8pm
+    hour  = time and time.hour or (date and date.night and 20 or 9),
     min   = time and time.min or 0,
     sec   = 0,
   }
@@ -223,10 +241,21 @@ function M.extract(text)
       at = at + 12 * 3600           -- "at 4" after 4am can still mean 4pm today
     end
     while at <= os.time() do at = at + 86400 end
-  elseif at <= os.time() and not date.y then
-    -- A bare "august 1" that already passed means next year.
-    when.year = when.year + 1
-    at = os.time(when) or at
+  elseif at <= os.time() then
+    if date.sameday and not time then
+      -- "today" whose default 9am already passed still means *today*: move to
+      -- the evening, or an hour out if the evening is gone too. Leaving it in
+      -- the past would fire the reminder the moment it was made.
+      when.hour, when.min = 20, 0
+      at = os.time(when)
+      if not at or at <= os.time() then at = os.time() + 3600 end
+    elseif not date.y then
+      -- A bare "august 1" that already passed means next year. ("today at
+      -- 2pm" said at 3pm keeps its past time and fires now — you're late,
+      -- and the reminder saying so beats it silently moving.)
+      when.year = when.year + 1
+      at = os.time(when) or at
+    end
   end
 
   -- Cut the later span first so the earlier index stays valid.

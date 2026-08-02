@@ -84,8 +84,13 @@ local function persist()
   hs.fs.mkdir((config.projectDir or os.getenv("HOME")) .. "/data")
   local ok, blob = pcall(hs.json.encode, overrides, true)
   if not ok then return end
-  local f = io.open(path(), "w")
-  if f then f:write(blob); f:close() end
+  -- write-then-rename so a concurrent reader never sees a half-written file
+  local tmp = path() .. ".tmp"
+  local f = io.open(tmp, "w")
+  if not f then return end
+  f:write(blob)
+  f:close()
+  os.rename(tmp, path())
 end
 
 -- The effective set: defaults with any override applied. Everything that

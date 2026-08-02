@@ -799,7 +799,7 @@ def learn() -> dict:
             "dismiss": c["dismiss"],
         }
     DATA.mkdir(exist_ok=True)
-    (DATA / "weights.json").write_text(json.dumps(weights, indent=2, sort_keys=True))
+    _write_atomic(DATA / "weights.json", json.dumps(weights, indent=2, sort_keys=True))
     print(f"learned from {n} labelled events across {len(weights)} features")
     return weights
 
@@ -813,6 +813,15 @@ THRESH_FIRE = 0.55  # >= interrupt with a card
 THRESH_INBOX = 0.50  # >= keep silently in the inbox; below this, drop
 # 0.50, not 0.30: below half-confidence the extractor is guessing at whether
 # the user is even the one on the hook. Those cost more to read than they save.
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Write-then-rename so a concurrent reader never sees a half-written file
+    (the dashboard reads weights.json; a torn extract_state.json would reset
+    the cursor and replay a day of captures)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
 
 
 def state_path() -> Path:
@@ -829,7 +838,7 @@ def save_state(st: dict) -> None:
     DATA.mkdir(exist_ok=True)
     st["seen"] = st["seen"][-2000:]
     st["keys"] = st.get("keys", [])[-400:]
-    state_path().write_text(json.dumps(st))
+    _write_atomic(state_path(), json.dumps(st))
 
 
 def new_entries(state: dict) -> list[dict]:

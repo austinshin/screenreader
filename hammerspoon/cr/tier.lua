@@ -9,11 +9,14 @@
 -- be due at the same instant and deserve completely different volume.
 --
 -- IMPORTANT: tier is not a property of the reminder, it is a property of the
--- reminder *right now*. "Take out the trash" is ambient at 2pm, upcoming at
--- 7pm, and critical at 11:55 the night before collection — nothing about it
--- changed except its distance from consequence. So this module computes an
--- opening position; cr.trigger re-evaluates it as context moves. A classifier
--- that stamped a tier once and never revisited would be wrong within the hour.
+-- reminder *right now*. "Email the landlord by 5" can wait all morning and is
+-- upcoming once 5pm is inside the hour — nothing about it changed except its
+-- distance from consequence. So this module computes an opening position;
+-- cr.trigger re-evaluates it as context moves, inside two hard limits:
+-- ambient is never promoted ("never interrupts" has to mean never), and
+-- critical is only ever assigned here, from stated consequence — the clock
+-- alone caps out at upcoming. A classifier that stamped a tier once and never
+-- revisited would still be wrong within the hour.
 --
 -- Design note: 1 and 4 are never defaults. Ambient is too quiet to be a safe
 -- default for something you asked to be reminded of; critical is too loud to
@@ -92,11 +95,6 @@ function M.classify(text, bound)
   end
   if best then return best, why end
   return M.UPCOMING, "no urgency or context signal — treated as an ordinary commitment"
-end
-
--- Does this tier get to interrupt at all?
-function M.interrupts(tier)
-  return (tier or M.UPCOMING) <= M.INCONTEXT
 end
 
 -- Critical is the only tier allowed past the seam gate. Everything else waits

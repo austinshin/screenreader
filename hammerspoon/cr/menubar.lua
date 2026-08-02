@@ -17,7 +17,7 @@ local mb
 
 local STATE_ICON = {
   pending = "⏳", armed = "👁", cooldown = "⏱",
-  ready = "🕐", fired = "🔔", snoozed = "💤",
+  ready = "🕐", fired = "🔔",
 }
 
 local function truncate(s, n)

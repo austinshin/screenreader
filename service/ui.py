@@ -37,6 +37,14 @@ PORT = int(os.environ.get("CR_UI_PORT", "8765"))
 # ----------------------------------------------------------------- data ------
 
 
+def _write_atomic(path: Path, text: str) -> None:
+    """Write-then-rename. Both UIs poll these files; a reader that lands
+    mid-truncate must see the previous version, never a half-written one."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def _tail_jsonl(path: Path, n: int) -> list[dict]:
     if not path.exists():
         return []
@@ -308,7 +316,7 @@ def load_dismissed() -> set[str]:
 def save_dismissed(keys: set[str]) -> None:
     DATA.mkdir(exist_ok=True)
     # bounded: this is a hide-list, not a second copy of the log
-    DISMISSED.write_text(json.dumps(sorted(keys)[-2000:]))
+    _write_atomic(DISMISSED, json.dumps(sorted(keys)[-2000:]))
 
 
 def undo_last_feedback() -> dict | None:
@@ -321,7 +329,8 @@ def undo_last_feedback() -> dict | None:
     if not lines:
         return None
     last = lines.pop()
-    path.write_text("\n".join(lines) + ("\n" if lines else ""))
+    # atomic: this file is the training set — a torn rewrite loses every label
+    _write_atomic(path, "\n".join(lines) + ("\n" if lines else ""))
     try:
         return json.loads(last)
     except json.JSONDecodeError:
@@ -660,7 +669,7 @@ function railFor(r){
     return {cls: s < 900 ? 'soon' : '', top: day+clock, sub: rel};
   }
   const map = {pending:'waiting', armed:'watching', cooldown:'watching',
-               ready:'any moment', snoozed:'snoozed', fired:'reminded'};
+               ready:'any moment', fired:'reminded'};
   // only a sub-label that adds something: "on your screen" restated the state
   return {cls:'ctx', top: map[r.state] || r.state,
           sub: r.state==='pending' ? 'not seen yet' : ''};
@@ -719,7 +728,6 @@ function stateLine(r){
     return `👀 you stepped away — ${n} of ${need} checks (going back resets it)`;
   }
   if (r.state === 'ready')     return "👀 ready — waiting for a natural break";
-  if (r.state === 'snoozed')   return '💤 snoozed';
   if (r.state === 'fired')     return '🔔 reminded — mark it done on the card';
   return r.state;
 }
