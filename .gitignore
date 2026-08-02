@@ -5,6 +5,7 @@ bin/
 # whisper weights (~148MB) — setup.sh downloads them
 models/
 hammerspoon/cr/secrets.lua
+windows/crw/secrets.py
 .DS_Store
 .venv/
 __pycache__/
