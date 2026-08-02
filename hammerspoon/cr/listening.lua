@@ -133,6 +133,33 @@ function M.created(task, when)
   autoHide(2.6)
 end
 
+-- Push-to-talk states. Separate from listening/capturing because the question
+-- in the user's head is different: with a wake word it is "did it hear me",
+-- while holding a key it is "am I actually being recorded, and for how long".
+--
+-- No auto-hide while recording — the held key is the timer, and a panel that
+-- vanished mid-sentence would say the opposite of what is true.
+function M.recording(elapsed, peakDb, live)
+  if config.voice and config.voice.hud == false then return end
+  M.state = "recording"
+  local status = live
+    and string.format("recording… %.1fs   release to stop", elapsed or 0)
+    or "starting the mic…"
+  -- A level that never leaves the floor means a muted or wrong input device.
+  -- Saying so here beats letting the user find out via an empty transcript.
+  local heard = nil
+  if live and peakDb and peakDb <= -55 then heard = "hearing nothing — is the mic muted?" end
+  render(status, heard, nil, nil, false)
+  if hideTimer then hideTimer:stop(); hideTimer = nil end
+end
+
+function M.transcribing()
+  if config.voice and config.voice.hud == false then return end
+  M.state = "transcribing"
+  render("transcribing…", nil, nil, nil, false)
+  autoHide(15)  -- safety net only; the whisper callback normally replaces this
+end
+
 function M.rejected(reason)
   if config.voice and config.voice.hud == false then return end
   M.state = "rejected"

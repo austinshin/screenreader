@@ -100,15 +100,17 @@ end
 -- half the value. `state` is nil (nothing), true/false (dot), or a string.
 local function rows()
   local ok, screenText = pcall(require, "cr.screen_text")
-  local okV, voice = pcall(require, "cr.voice")
+  local okV, capture = pcall(require, "cr.capture")
   local okS, suggestions = pcall(require, "cr.suggestions")
   local okH, hotkeys = pcall(require, "cr.hotkeys")
   local watching = ok and screenText.watching or false
-  local listening = okV and voice.running or false
+  -- which of the three capture modes is live, spelled out — a dot could only
+  -- say on/off, and "off" and "wake word" are very different situations
+  local mode = okV and capture.label() or nil
   local queued = okS and #suggestions.inbox or 0
 
   local state = {
-    voice = listening,
+    voice = mode,
     watch = watching,
     review = queued > 0 and tostring(queued) or nil,
   }
@@ -121,11 +123,11 @@ local function rows()
   -- the spoken path has no chord, so it is stated rather than bound
   local list = hotkeys.list()
   for i, b in ipairs(list) do
-    if b.id == "voice" then
-      out[#out + 1] = { label = "Say it instead",
-                        chord = '"hey screenreader, remind me to…"', state = listening }
-    end
-    out[#out + 1] = { label = b.label, chord = b.chord, state = state[b.id] }
+    -- "hold" has to be visible: pressing and releasing a hold binding does
+    -- nothing useful, so a cheatsheet that prints it like every other chord is
+    -- telling you something that won't work.
+    local chord = b.hold and ("hold " .. b.chord) or b.chord
+    out[#out + 1] = { label = b.label, chord = chord, state = state[b.id] }
     if after[b.id] and i < #list then out[#out + 1] = { sep = true } end
   end
   return out

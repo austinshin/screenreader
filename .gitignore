@@ -2,6 +2,8 @@ logs/
 data/
 tmp/
 bin/
+# whisper weights (~148MB) — setup.sh downloads them
+models/
 hammerspoon/cr/secrets.lua
 .DS_Store
 .venv/

@@ -71,12 +71,29 @@ end
 
 -- Does this line look like nothing but a time? ("like 12 pm", "in 5 minutes")
 -- Used to reattach a time the recognizer split into its own utterance.
+--
+-- Lua patterns have no `|` alternation. The previous one-liner here read
+-- "(am|pm|minutes?|…)" as a literal character class rather than a choice, so
+-- it never matched real speech — ("in five minutes"):match(…) is false. Only
+-- the digit and tomorrow/tonight branches ever fired, which silently dropped
+-- the time from any split utterance whose tail was spelled out instead of
+-- numeric. Same class of bug as the "(on|at|by|in)$" one already fixed in
+-- cr.timeparse; a table of literal patterns is what actually works.
+local TIME_UNITS = {
+  "am", "pm", "minutes", "minute", "mins", "min", "hours", "hour",
+  "hrs", "hr", "seconds", "second", "secs", "sec",
+  "o'clock", "oclock", "noon", "midnight", "tomorrow", "tonight",
+}
+
 local function timeOnly(t)
   if #t > 34 then return nil end
   local body = t:gsub("^%s*like%s+", ""):gsub("^%s*", "")
   local hasDigit = body:match("%d")
-  local hasUnit = body:match("%f[%a](am|pm|minutes?|mins?|hours?|hrs?|seconds?|secs?|o'?clock)%f[%A]")
-    or body:match("%f[%a]tomorrow%f[%A]") or body:match("%f[%a]tonight%f[%A]")
+  local hasUnit = false
+  for _, u in ipairs(TIME_UNITS) do
+    -- %f frontier on both sides so "seconds" doesn't match inside "secondary"
+    if body:find("%f[%w]" .. u:gsub("'", "'?") .. "%f[%W]") then hasUnit = true; break end
+  end
   if not (hasDigit or hasUnit) then return nil end
   -- a bare clock time needs a preposition for cr.timeparse to see it
   if body:match("^%d") then return "at " .. body end

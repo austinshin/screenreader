@@ -68,6 +68,21 @@ local M = {
     cooldownSeconds = 12,  -- ignore repeats/edits of the last capture
   },
 
+  -- Push-to-talk (cr.dictate) — the default capture path; the wake word above
+  -- is kept as the alternative. Which one is live is a single tri-state owned
+  -- by cr.capture, so the two can never run at once.
+  dictate = {
+    recorder          = nil,   -- auto: bin/cr-rec, else ffmpeg
+    whisper           = "/opt/homebrew/bin/whisper-cli",
+    model             = nil,   -- auto: <project>/models/ggml-base.en.bin
+    language          = "en",  -- skip detection: it is wrong often on 3s clips
+    threads           = 8,     -- performance cores on an M1 Pro
+    maxSeconds        = 20,    -- watchdog for a key-up that never arrives
+    minSeconds        = 0.35,  -- shorter than this is a fumbled key, not speech
+    transcribeTimeout = 12,
+    keepFailedAudio   = true,  -- keep last-failed.wav when a parse fails
+  },
+
   -- browsers we can ask for the active tab (bundle id → applescript dialect)
   browsers = {
     ["com.google.Chrome"]          = "chrome",

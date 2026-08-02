@@ -19,30 +19,35 @@ Start with **[The one path that matters](#the-one-path-that-matters)**. If you o
 
 ## The one path that matters
 
-You say *"hey screenreader, remind me to reply to this once I'm done here."*
+You hold `⌃⌥⌘D` and say *"remind me to reply to this once I'm done here."*
 
 ```
-hear (launchd) ──▶ voice.lua ──▶ reminders.lua ──▶ trigger.lua ──▶ notifier.lua ──▶ notify_ui.lua
-   transcript       parse+debounce   store+classify   watch+decide     route          draw card
+cr-rec ──▶ whisper-cli ──▶ dictate.lua ──▶ reminders.lua ──▶ trigger.lua ──▶ notifier.lua ──▶ notify_ui.lua
+ record      transcribe      clean          store+classify   watch+decide      route          draw card
 ```
 
-**1. `hear` writes a transcript.** A launchd agent (`~/Library/LaunchAgents/cr.voice.hear.plist`, written by `voice.lua:writePlist`) runs `hear -d` and appends growing partial transcripts to `~/Library/Logs/cr-voice/voice-transcript.log`.
+**1. `bin/cr-rec` records while the key is held.** A ~90-line Swift CLI (`audio/cr-rec.swift`) spawned via `hs.task` on key-down and sent SIGTERM on key-up. It writes 16 kHz mono 16-bit WAV — whisper.cpp's native format, so there is no conversion step — and speaks a tiny protocol on stdout: `READY` once capture actually starts, then `LVL <peak-dBFS>` every 100 ms.
 
-> Why launchd and not `hs.task`: a child process's mic permission is attributed to its *responsible process*. Spawned from Hammerspoon, macOS attributes it to Hammerspoon — which has no speech-recognition usage string — and kills it instantly (exit 6). As its own agent, `hear` asks for its own permissions.
+> Why a Swift binary rather than ffmpeg: ffmpeg is the fallback and works, but it needs 0.5–1.5s to open an `AVCaptureSession` (the worst place to spend latency in push-to-talk) and reports a denied microphone and a busy device with the same `Input/output error`. `cr-rec` exits **77** specifically for "denied", which is the one failure needing a different fix from all the others. It also follows the house pattern already set by `ocr/cr-ocr.swift`, so `swiftc` is not a new dependency.
 
-**2. `voice.lua` turns transcript lines into a command.** `poll` (every 0.35s) tails the file and calls `M._ingest(line)` per line:
+> Why `hs.task` works here when it didn't for `hear`: a child's permission is attributed to its *responsible process*. `hear` requested **Speech Recognition**, which Hammerspoon has no usage string for, so macOS killed it — hence the launchd agent. Whisper never touches the Speech framework; it is arithmetic over a file. Only the microphone is needed, and Hammerspoon *does* declare `NSMicrophoneUsageDescription`. The entire TCC workaround disappears.
 
-| Function | Job |
+**2. `whisper-cli` transcribes it once.** `-nt -np` makes stdout the bare transcript with no timestamps and no banner. Note the output shape: **all segments concatenate onto one line with no trailing newline**, and it begins with a space — so the parser trims the whole of stdout rather than reading lines. ~0.4s warm on an M1 Pro; the first run ever takes ~13s compiling Metal shaders, which `setup.sh` absorbs.
+
+**3. `dictate.lua` cleans it.** `_clean(raw)` is three rules: trim, reject whole-string noise, strip an optional preamble.
+
+| Rule | Why |
 |---|---|
-| `M._wakeAt(line)` | is the wake word present, and where? Drives the HUD *before* a full command exists. |
-| `M._parse(line)` | wake word → strip everything up to it → match `remind me to (.+)` |
-| `boundCommand(text)` | **where the command ends.** A stated time terminates it; otherwise a 16-word cap. |
-| `sameThing(a, b)` | content-word overlap, for the duplicate guard |
-| `arm()` / `M._settleNow()` | fire once the transcript stops changing for `settleSeconds` |
+| trim, drop trailing `.` | Whisper punctuates and capitalizes; `hear` never did |
+| reject `[BLANK_AUDIO]`, `Thank you.`, `you`, … | on silence Whisper **hallucinates captions** rather than returning empty |
+| noise matched as **whole strings only** | as substrings, "thank you" would eat *"thank Ruth for the coffee"* |
+| `remind me to` preamble optional | the key already marks the start, so it is politeness, not syntax |
 
-> Three bugs live here, and the comments say so: the command had no end (captured whole conversations), the settle timer fired mid-sentence, and the dupe guard only caught *extensions* when the recognizer *revises*. `cr/test_capture.lua` replays the real transcripts that caused them.
+> **What is absent here is the point.** The wake word, the settle timer, `boundCommand`'s 16-word cap, `sameThing`'s overlap check, and the cooldown all existed to guess where an utterance began and ended, because a streaming recognizer never says. A held key answers both exactly, so all five are gone rather than fixed — along with their failure modes. `cr/test_dictate.lua` locks two of those decisions in place: that a time phrase does **not** truncate the task, and that noise matching stays whole-string.
 
-**3. `reminders.lua:M.add(text, snap, opts)` — the single funnel.** Voice, hotkey, and suggestion-accept all land here, so they cannot drift:
+> `voice.lua` and its `test_capture.lua` are kept, and still pass. That file replays the real transcripts — including the live demo that made two reminders from one sentence — and is the evidence for why this path exists. `cr.capture` holds a single tri-state (`ptt` | `wake` | `off`) rather than two booleans, so "both running" cannot be represented; if it could, `hear` would transcribe your push-to-talk utterance and create a second reminder.
+
+**4. `reminders.lua:M.add(text, snap, opts)` — the single funnel.** Voice, hotkey, and suggestion-accept all land here, so they cannot drift:
 
 ```lua
 condition.extract(text)  -- "…once I'm done here" → task + condition phrase
@@ -61,7 +66,7 @@ state = dueAt and "scheduled"                       -- fires on the clock
                                      or "pending")  -- wait for it to appear
 ```
 
-**4. `trigger.lua` decides *when*.** `observer.lua` samples context every 5s and calls `M.tick(snap)`. Per reminder, per tick:
+**5. `trigger.lua` decides *when*.** `observer.lua` samples context every 5s and calls `M.tick(snap)`. Per reminder, per tick:
 
 - `retier(r, snap)` — recompute the attention tier (consequence nearer? context arrived?)
 - `step(r, snap)` — advance the state machine
@@ -75,9 +80,11 @@ PENDING ──seen──▶ ARMED ──absent──▶ COOLDOWN ──absent ×
 
 > **Why edge-triggered.** "Remind me when I'm not watching the video" is *true the instant you make the reminder* — you're in the dialog, not the video. So it must see the thing present, then gone, then stay gone. COOLDOWN debounces a glance away; READY waits for a seam (app switch or return from idle) so it never lands mid-sentence. `tier.bypassesSeamGate()` is the single exception: **critical**.
 
-**5. `notifier.lua:M.notify(payload, opts)` routes.** A channel registry (`card`, `system`, `discord`, `slack`, `webhook`) — `M.register(name, fn)` adds one. If you've been idle past `config.idleThreshold` it also mirrors to `config.remoteChannels`.
+**6. `notifier.lua:M.notify(payload, opts)` routes.** A channel registry (`card`, `system`, `telegram`, `discord`, `slack`, `webhook`) — `M.register(name, fn)` adds one. If you've been idle past `config.idleThreshold` it also mirrors to `config.remoteChannels`, unless `opts.noMirror` says this is a redisplay rather than a new event.
 
-**6. `notify_ui.lua:M.show(opts)` draws.** An `hs.canvas` card, top-right, stacking downward.
+Channels receive **two** arguments, `(payload, note)`. The payload carries Lua closures and is what the card uses; `note` is the `cr.notification/v1` object from `notification.lua` — pure data, built **once** per dispatch so every channel describes the same event with the same id and timestamp. Remote channels translate that object rather than authoring their own message, which is what makes adding a channel ~20 lines instead of a fourth bespoke formatter.
+
+**7. `notify_ui.lua:M.show(opts)` draws.** An `hs.canvas` card, top-right, stacking downward.
 
 | opt | Effect |
 |---|---|
@@ -101,16 +108,20 @@ PENDING ──seen──▶ ARMED ──absent──▶ COOLDOWN ──absent ×
 | `config.lua` | 85 | Every tunable. Read at call time, so edit + reload takes effect immediately |
 | `observer.lua` | 196 | Samples context every 5s: app, window title, browser tab (AppleScript), media, idle. Publishes to subscribers |
 | `matcher.lua` | 94 | What "this" means. `bind()` makes a referent; `matches()` tests presence. URL-keyed for browsers (video IDs normalized), title-keyed otherwise |
-| `reminders.lua` | 218 | The store. `add` (the funnel), `confirm` (creation card), `describe`, `setState`, `promptNew` (hotkey dialog) |
-| `trigger.lua` | 292 | The FSM, `retier`, `checkDue`, `fire`, `restoreFired` |
+| `reminders.lua` | 278 | The store. `add` (the funnel), `waiting` (why it hasn't fired), `confirm`, `describe`, `setState`, `promptNew` |
+| `trigger.lua` | 344 | The FSM, `retier`, `checkDue`, `fire`, `onCapture` (content conditions), `restoreFired` |
 | `tier.lua` | 109 | Attention tiers 1–4 from language + binding. `bypassesSeamGate` is the load-bearing rule |
 | `timeparse.lua` | 264 | Date and time out of text. Independent halves, combined — see below |
 | `condition.lua` | 76 | Splits "…after I finish watching this" from the task |
-| `notifier.lua` | 175 | Channel registry + presence routing |
+| `notifier.lua` | 215 | Channel registry + presence routing. Channels get `(payload, note)` |
 | `notify_ui.lua` | 218 | The canvas card |
 | `listening.lua` | 153 | Live transcription HUD (listening → capturing → created) |
-| `voice.lua` | 406 | launchd agent, transcript tailing, wake word, debounce, dupe guard |
-| `hotkeys.lua` | 165 | **One registry** for every binding; user overrides in `data/hotkeys.json` |
+| `dictate.lua` | 398 | **Push-to-talk.** Record → whisper → `_clean` → reminder. The default capture path |
+| `capture.lua` | 104 | Which voice path is live: one tri-state (`ptt`\|`wake`\|`off`), so "both" is unrepresentable |
+| `notification.lua` | 124 | Builds the `cr.notification/v1` object every channel receives |
+| `watchfor.lua` | 165 | Conditions about the *world* ("after the tests run") — OCR text, still edge-triggered |
+| `voice.lua` | 433 | The older wake-word path: launchd agent, transcript tailing, debounce, dupe guard |
+| `hotkeys.lua` | 190 | **One registry** for every binding; user overrides in `data/hotkeys.json`. Handlers may be a fn (tap) or `{pressed, released}` (hold) |
 | `keys.lua` | 257 | The draggable cheatsheet. Reads `hotkeys.list()` — never its own copy |
 | `menubar.lua` | 149 | Status icon and menu |
 | `screen_text.lua` | 256 | OCR: window snapshot → `bin/cr-ocr` (Apple Vision) → JSONL |
@@ -118,7 +129,8 @@ PENDING ──seen──▶ ARMED ──absent──▶ COOLDOWN ──absent ×
 | `suggestions.lua` | 270 | Consumes `candidates.jsonl`. **Off by default** |
 | `why.lua` | 60 | The decision log — English, not JSON |
 | `log.lua` | — | JSONL event append |
-| `test_capture.lua` | 99 | Replays recorded transcripts. Run: `hs -c 'require("cr.test_capture").run()'` |
+| `test_capture.lua` | 99 | Replays recorded `hear` transcripts. `hs -c 'require("cr.test_capture").run()'` |
+| `test_dictate.lua` | 115 | Replays real whisper output through `_clean`. `hs -c 'require("cr.test_dictate").run()'` |
 
 ### Python — `service/`
 
@@ -127,6 +139,13 @@ PENDING ──seen──▶ ARMED ──absent──▶ COOLDOWN ──absent ×
 | `ui.py` | 1165 | The whole dashboard: `snapshot()` builds state, `PAGE` is the HTML/CSS/JS string, `Handler` is the routes |
 | `extract.py` | 854 | OCR → candidates. The gate, the extractors, the learning layer |
 | `test_gate.py` | 119 | Labeled gate eval. `python3 service/test_gate.py` |
+
+### Swift — compiled by `setup.sh` into `bin/`
+
+| File | What it owns |
+|---|---|
+| `ocr/cr-ocr.swift` | Apple Vision OCR: image path in, recognized text out |
+| `audio/cr-rec.swift` | 16 kHz mono recorder. `READY`/`LVL` on stdout, exit **77** for a denied mic |
 
 ---
 
@@ -187,7 +206,8 @@ No build step; `python3 service/ui.py` is the whole deployment. `PAGE` is a raw 
 ```sh
 ./smoke-test.sh                                  # seven layers, ~20s
 python3 service/test_gate.py                     # gate precision/recall
-hs -c 'require("cr.test_capture").run()'         # voice capture
+hs -c 'require("cr.test_dictate").run()'         # push-to-talk parser
+hs -c 'require("cr.test_capture").run()'         # the older wake-word path
 luac -p hammerspoon/cr/*.lua                     # Lua syntax
 ```
 

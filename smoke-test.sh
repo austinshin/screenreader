@@ -106,7 +106,57 @@ else
   ok "suggestions watcher off (experiment disabled in config — expected)"
 fi
 
-section "7. Logs"
+section "7. Push-to-talk (record → Whisper)"
+# Split deliberately: the parser is tested in-process where it is fast and
+# deterministic, and the binaries are tested here where async and a real
+# microphone are natural. Neither half proves the other works.
+dic="$(hs -c 'return require("cr.test_dictate").run()' 2>/dev/null | tail -1)"
+case "$dic" in
+  *"0 failed") ok "dictation parser — $dic" ;;
+  "")          bad "dictation tests did not run (Hammerspoon unreachable?)" ;;
+  *)           bad "dictation parser — $dic" ;;
+esac
+
+[ -x bin/cr-rec ] && ok "bin/cr-rec built" \
+  || bad "bin/cr-rec missing → swiftc -O audio/cr-rec.swift -o bin/cr-rec"
+command -v whisper-cli >/dev/null && ok "whisper-cli installed" \
+  || bad "whisper-cli missing → brew install whisper-cpp"
+[ -s models/ggml-base.en.bin ] && ok "speech model present" \
+  || bad "speech model missing → ./setup.sh"
+
+# Real transcription on Homebrew's own sample: proves the flags, the model, and
+# the output parsing together. Asserting on the words (not just non-empty)
+# is what would catch a model file that downloaded as an HTML error page.
+if command -v whisper-cli >/dev/null && [ -s models/ggml-base.en.bin ] \
+   && [ -f /opt/homebrew/share/whisper-cpp/jfk.wav ]; then
+  if whisper-cli -m models/ggml-base.en.bin -f /opt/homebrew/share/whisper-cpp/jfk.wav \
+       -l en -nt -np 2>/dev/null | grep -qi "ask not what your country"; then
+    ok "whisper transcribes the bundled sample correctly"
+  else
+    bad "whisper transcription wrong — is models/ggml-base.en.bin a real ggml file?"
+  fi
+fi
+
+# One second of real audio proves the microphone permission end to end. Exit 77
+# is specifically "denied", which needs a different fix from every other error.
+if [ -x bin/cr-rec ]; then
+  mkdir -p tmp
+  ./bin/cr-rec tmp/smoke-mic.wav 1 >/dev/null 2>&1; rc=$?
+  if [ "$rc" = "77" ]; then
+    bad "microphone denied → System Settings › Privacy & Security › Microphone"
+  elif afinfo tmp/smoke-mic.wav 2>/dev/null | grep -q "16000 Hz"; then
+    ok "cr-rec captured 16kHz mono audio"
+  else
+    bad "cr-rec failed (exit $rc)"
+  fi
+  rm -f tmp/smoke-mic.wav
+fi
+
+mode="$(hs -c 'return CR.capture.mode()' 2>/dev/null | tail -1)"
+[ -n "$mode" ] && ok "capture mode: $mode (exactly one voice path can be live)" \
+  || bad "capture mode unreadable"
+
+section "8. Logs"
 for f in "logs/events-$(date +%Y-%m-%d).jsonl" "logs/ocr-$(date +%Y-%m-%d).jsonl"; do
   [ -s "$f" ] && ok "$f ($(wc -l < "$f" | tr -d ' ') lines)" || bad "$f empty/missing"
 done

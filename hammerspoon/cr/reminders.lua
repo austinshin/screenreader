@@ -11,6 +11,7 @@ local matcher = require("cr.matcher")
 local observer = require("cr.observer")
 local timeparse = require("cr.timeparse")
 local condition = require("cr.condition")
+local watchfor = require("cr.watchfor")
 local tier = require("cr.tier")
 local ui = require("cr.notify_ui")
 
@@ -53,6 +54,17 @@ function M.add(text, snap, opts)
   -- the trigger clause is not part of the task: strip it, keep it for the log
   local body, cond = condition.extract(text)
   if cond then text = body end
+  -- Conditions come in two kinds and they are handled by different modules:
+  -- cr.condition covers conditions about *you* ("once I'm done with this"),
+  -- which map onto window presence; cr.watchfor covers conditions about the
+  -- *world* ("after the tests run"), which map onto text on screen changing
+  -- state. They are disjoint by construction, so watchfor is only consulted
+  -- when the first found nothing.
+  local watch
+  if not cond then
+    watch = watchfor.parse(text)
+    if watch then text = watch.task end
+  end
   local clean, dueAt, phrase = timeparse.extract(text)
   dueAt = dueAt or opts.dueAt
   if phrase then text = clean end
@@ -62,6 +74,10 @@ function M.add(text, snap, opts)
     if dueAt then
       -- timed reminders don't need a screen referent; record where it was set
       ref = { kind = "time", label = "anywhere", boundAt = os.time() }
+    elseif watch then
+      -- a content condition watches text, not a window: the subject is the
+      -- referent, and it can be satisfied in any app that shows it
+      ref = { kind = "content", label = watch.subject, boundAt = os.time() }
     else
       log.append({ event = "reminder.rejected", reason = "no bindable context", text = text })
       return nil
@@ -84,11 +100,19 @@ function M.add(text, snap, opts)
     dueAt = dueAt,            -- epoch; nil for purely contextual reminders
     whenPhrase = phrase,      -- the words the time came from, verbatim
     condPhrase = cond,        -- the words the screen condition came from
+    -- a content condition. seenPending starts false on purpose: it is what
+    -- makes this edge-triggered, so last run's "12 passed" still on screen
+    -- cannot satisfy a condition you just created.
+    watchFor = watch and { subject = watch.subject, phrase = watch.phrase,
+                           seenPending = false } or nil,
     channels = opts.channels or { "card" }, -- default: notification on this Mac
     via = opts.via,
     -- timed reminders fire on the clock; deictic ones are usually born ARMED
     -- (the thing is on screen right now), else PENDING until first sighting
+    -- a content condition always starts pending: it must see the subject
+    -- running before it can see it finish
     state = dueAt and "scheduled"
+      or (watch and "pending")
       or (matcher.matches(ref, snap) and "armed" or "pending"),
     absent = 0,
   }
@@ -160,6 +184,36 @@ function M.describe(r)
   end
   parts[#parts + 1] = "📣 " .. table.concat(r.channels or { "card" }, "+")
   return table.concat(parts, " · ")
+end
+
+-- Why this reminder has not fired yet, in one short line.
+--
+-- This is the fix for the most expensive invisible state in the system: a
+-- reminder one check away from firing and a reminder that resets every time you
+-- glance back look *identical* from outside. Both just sit there. The FSM knows
+-- the difference — it is counting consecutive absent samples — but that count
+-- never left the event log, so "why hasn't this fired?" could only be answered
+-- by reading state transitions, which is not a thing anyone should have to do.
+--
+-- Shared by the glance panel and the dashboard so the two cannot drift.
+function M.waiting(r)
+  local cfg = config.trigger or {}
+  local need = cfg.absentSamples or 6
+  if r.dueAt and (r.state == "scheduled" or r.state == "snoozed") then
+    return nil  -- the clock already answers this; whenFor shows it
+  end
+  local where = r.referent and r.referent.label or "it"
+  if r.state == "pending" then
+    return "waiting for " .. where .. " to appear"
+  elseif r.state == "armed" then
+    return "watching " .. where .. " — you're still on it"
+  elseif r.state == "cooldown" then
+    local n = r.absent or 0
+    return string.format("you left %s · %d of %d checks away", where, n, need)
+  elseif r.state == "ready" then
+    return "ready — waiting for a natural break"
+  end
+  return nil
 end
 
 function M.setChannels(id, channels)

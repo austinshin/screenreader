@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -72,6 +73,60 @@ def hs(lua: str, timeout: float = 4) -> str:
         return ""
 
 
+# Everything the page needs from Hammerspoon, in one round trip.
+#
+# This was six separate `hs -c` calls. Each one is a process spawn plus IPC,
+# each carried its own 4s timeout, and the page refreshes every 4s — so a busy
+# or wedged Hammerspoon could block a single refresh for 24 seconds. It did,
+# which is why the dashboard froze mid-session.
+#
+# The pcall matters as much as the batching: with six calls a nil module cost
+# you one field, with one call it would cost you all of them. Anything missing
+# degrades to a default rather than taking the blob down with it.
+_HS_STATE_LUA = """
+local ok, blob = pcall(function()
+  local c = CR.observer and CR.observer.current
+  return hs.json.encode({
+    context = c and ((c.app or '?') .. ' — ' .. (c.tab or c.title or '')) or 'no context',
+    watching = (CR.screenText and CR.screenText.watching) and true or false,
+    voice = (CR.voice and CR.voice.running) and true or false,
+    dictate = (CR.dictate and CR.dictate.enabled and CR.dictate.enabled()) and true or false,
+    capture_mode = (CR.capture and CR.capture.mode and CR.capture.mode()) or 'off',
+    suggestions_on = not (CR.config and CR.config.suggestions
+                          and CR.config.suggestions.enabled == false),
+    absent_needed = (CR.config and CR.config.trigger
+                     and CR.config.trigger.absentSamples) or 6,
+    hotkeys = (CR.hotkeys and CR.hotkeys.list()) or {},
+    channels = (CR.notifier and CR.notifier.available()) or {},
+  })
+end)
+return ok and blob or ''
+"""
+
+_hs_cache: dict = {"at": 0.0, "data": None}
+
+
+def hs_state(max_age: float = 2.0) -> dict:
+    """Live Hammerspoon state, one subprocess per `max_age` window.
+
+    Cached because a page load can hit several endpoints at once, and six
+    concurrent `hs` spawns for the same facts is how you make the thing you
+    are querying slower.
+    """
+    now = time.monotonic()
+    if _hs_cache["data"] is not None and now - _hs_cache["at"] < max_age:
+        return _hs_cache["data"]
+    try:
+        data = json.loads(hs(_HS_STATE_LUA) or "{}")
+        if not isinstance(data, dict):
+            data = {}
+    except json.JSONDecodeError:
+        data = {}
+    _hs_cache["at"] = now
+    _hs_cache["data"] = data
+    return data
+
+
 def snapshot() -> dict:
     ocr = _tail_jsonl(today("ocr"), 40)
     # deep tail: heartbeat events vastly outnumber the notify.dispatch rows the
@@ -111,26 +166,24 @@ def snapshot() -> dict:
         except json.JSONDecodeError:
             pass
 
-    ctx = hs("local c=CR.observer.current; return c and ((c.app or '?')..' — '..(c.tab or c.title or '')) or 'no context'")
-    watching = hs("return tostring(CR.screenText.watching)") == "true"
-    voice = hs("return tostring(CR.voice and CR.voice.running)") == "true"
+    live = hs_state()
+    ctx = live.get("context") or "no context"
+    watching = bool(live.get("watching"))
+    voice = bool(live.get("voice"))
+    capture_mode = live.get("capture_mode") or "off"
 
     # the inference experiment is opt-in; when it's off its UI shouldn't be
     # there at all — a tab for a disabled feature is just a dead end
-    suggestions_on = hs("return tostring(CR.config.suggestions.enabled ~= false)") == "true"
+    suggestions_on = bool(live.get("suggestions_on"))
 
     # keybindings come from the Lua registry, never a copy kept here
-    try:
-        hotkeys = json.loads(hs("return hs.json.encode(CR.hotkeys.list())") or "[]")
-    except json.JSONDecodeError:
+    hotkeys = live.get("hotkeys")
+    if not isinstance(hotkeys, list):
         hotkeys = []
 
     # delivery channels + configuration state, straight from the Lua registry
-    try:
-        channels_available = json.loads(
-            hs("return hs.json.encode(CR.notifier.available())") or "[]"
-        )
-    except json.JSONDecodeError:
+    channels_available = live.get("channels")
+    if not isinstance(channels_available, list):
         channels_available = []
     if not channels_available:  # Hammerspoon unreachable — show the default
         channels_available = [{"name": "card", "configured": True,
@@ -150,6 +203,9 @@ def snapshot() -> dict:
         "context": ctx or "Hammerspoon not reachable",
         "watching": watching,
         "voice": voice,
+        "capture_mode": capture_mode,
+        # so the row can say "3 of 6" rather than hardcoding the threshold
+        "absent_needed": live.get("absent_needed") or 6,
         "counts": {
             "captures_today": len(ocr),
             "capture_files": len(list(caps_dir.glob("*.md"))) if caps_dir.exists() else 0,
@@ -655,7 +711,14 @@ function stateLine(r){
   if (r.state === 'scheduled') return '⏰ ' + fmtDue(r.dueAt);
   if (r.state === 'pending')   return "⏳ will start watching when it appears";
   if (r.state === 'armed')     return "👁 watching — reminds you when you're done";
-  if (r.state === 'cooldown' || r.state === 'ready') return "👀 you stepped away — reminding you soon";
+  // The count matters: a reminder one check from firing and one that resets
+  // every time you glance back are indistinguishable without it, and the
+  // second is the most common reason a reminder *looks* stuck.
+  if (r.state === 'cooldown') {
+    const n = r.absent || 0, need = state.absent_needed || 6;
+    return `👀 you stepped away — ${n} of ${need} checks (going back resets it)`;
+  }
+  if (r.state === 'ready')     return "👀 ready — waiting for a natural break";
   if (r.state === 'snoozed')   return '💤 snoozed';
   if (r.state === 'fired')     return '🔔 reminded — mark it done on the card';
   return r.state;
@@ -1125,7 +1188,15 @@ class Handler(BaseHTTPRequestHandler):
             # state and reminders.json can't diverge (Lua owns that file)
             rid = str(payload.get("id", ""))
             channels = payload.get("channels", [])
-            valid = {"card", "system", "discord", "slack", "webhook"}
+            # the channel list lives in the Lua registry, not in a copy here —
+            # a hardcoded set silently rejects any channel added later, which is
+            # exactly how "telegram isn't a valid channel" would have happened
+            valid = {c.get("name") for c in hs_state().get("channels", [])
+                     if isinstance(c, dict)}
+            if not valid:  # Hammerspoon unreachable — refuse rather than guess
+                self._send(503, b'{"ok":false,"error":"hammerspoon unreachable"}',
+                           "application/json")
+                return
             if (not rid.isalnum() or not channels
                     or not all(isinstance(c, str) and c in valid for c in channels)):
                 self._send(400, b'{"ok":false}', "application/json")

@@ -43,19 +43,65 @@ else
   bad "swiftc failed; try: swiftc -O ocr/cr-ocr.swift -o bin/cr-ocr"
 fi
 
-say "3. Python service"
+say "3. Push-to-talk (recorder + Whisper)"
+if swiftc -O audio/cr-rec.swift -o bin/cr-rec 2>/dev/null; then
+  ok "bin/cr-rec built (records 16kHz mono, exactly what whisper.cpp wants)"
+else
+  warn "swiftc failed for cr-rec → push-to-talk falls back to ffmpeg if installed"
+fi
+
+MODEL="models/ggml-base.en.bin"
+if command -v whisper-cli >/dev/null; then
+  ok "whisper-cli installed"
+  if [[ -s "$MODEL" ]]; then
+    ok "speech model present ($(du -h "$MODEL" | cut -f1))"
+  else
+    mkdir -p models
+    echo "   downloading ggml-base.en.bin (~148MB, one time)…"
+    if curl -L --fail --progress-bar -o "$MODEL" \
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"; then
+      ok "speech model downloaded"
+    else
+      rm -f "$MODEL"
+      warn "model download failed → push-to-talk stays off. Re-run ./setup.sh to retry."
+    fi
+  fi
+  # The first whisper run ever compiles Metal shaders: ~13s once, ~0.4s after.
+  # Spend it here rather than on the user's first reminder, where a 13-second
+  # pause reads as "this is broken" rather than "this is warming up".
+  if [[ -s "$MODEL" && -f /opt/homebrew/share/whisper-cpp/jfk.wav ]]; then
+    whisper-cli -m "$MODEL" -f /opt/homebrew/share/whisper-cpp/jfk.wav \
+      -l en -nt -np >/dev/null 2>&1 && ok "Metal shader cache warmed (first run is slow, exactly once)"
+  fi
+else
+  warn "whisper-cli not installed → push-to-talk is off. brew install whisper-cpp"
+fi
+
+# Ask for the microphone now, during install, rather than on the first key-down
+# mid-sentence — where a modal dialog steals focus and eats the utterance.
+if [[ -x bin/cr-rec ]]; then
+  set +e; ./bin/cr-rec /tmp/cr-mic-probe.wav 1 >/dev/null 2>&1; rc=$?; set -e
+  case $rc in
+    0)  ok "microphone access granted" ;;
+    77) warn "microphone denied → System Settings › Privacy & Security › Microphone › Hammerspoon" ;;
+    *)  warn "recorder probe failed (exit $rc) — check System Settings › Privacy › Microphone" ;;
+  esac
+  rm -f /tmp/cr-mic-probe.wav
+fi
+
+say "4. Python service"
 if [[ ! -d .venv ]]; then python3 -m venv .venv; fi
 ./.venv/bin/pip install -q --upgrade pip >/dev/null 2>&1 || true
 ./.venv/bin/pip install -q anthropic >/dev/null 2>&1 && ok "venv ready (anthropic installed)" \
   || warn "anthropic install failed — the extractor falls back to regex rules, everything else works"
 
-say "4. Optional extras"
+say "5. Optional extras"
 command -v hear >/dev/null && ok "hear — voice capture available" || warn \
   "hear not installed → voice input is off. Get it from github.com/sveinbjornt/hear (on-device speech)."
 command -v media-control >/dev/null && ok "media-control — knows if a video is still playing" || warn \
   "media-control not installed → 'done with this video' can't tell paused from closed. brew install media-control"
 
-say "5. Wire the Hammerspoon loader"
+say "6. Wire the Hammerspoon loader"
 HS_INIT="$HOME/.hammerspoon/init.lua"
 mkdir -p "$HOME/.hammerspoon"
 touch "$HS_INIT"
@@ -79,7 +125,7 @@ LUA
   ok "loader appended to ~/.hammerspoon/init.lua"
 fi
 
-say "6. Claude API key (optional)"
+say "7. Claude API key (optional)"
 if [[ -n "${ANTHROPIC_API_KEY:-}" ]] || security find-generic-password -s ANTHROPIC_API_KEY -w >/dev/null 2>&1; then
   ok "key found — the extractor can use Claude"
 else
@@ -87,14 +133,15 @@ else
   warn "  security add-generic-password -U -s ANTHROPIC_API_KEY -a \"\$USER\" -w 'sk-ant-...'"
 fi
 
-say "7. Permissions you must grant by hand"
+say "8. Permissions you must grant by hand"
 cat <<'TXT'
   System Settings → Privacy & Security → …
 
     Accessibility     → Hammerspoon    (read window titles — required)
     Screen Recording  → Hammerspoon    (OCR snapshots — required, then RESTART Hammerspoon)
     Automation        → Hammerspoon → your browser  (read the active tab; prompts on first use)
-    Microphone        → hear           (voice input — only if you installed hear)
+    Microphone        → Hammerspoon    (push-to-talk — ./setup.sh prompts for this)
+    Microphone        → hear           (only for the older wake-word mode)
     Speech Recognition→ hear           (same)
 
   Screen Recording in particular does not take effect until Hammerspoon is restarted.
@@ -108,5 +155,6 @@ cat <<TXT
   4. Press control+option+command+K for the hotkey cheatsheet.
 
   Then make a reminder while looking at something:
-     control+option+command+N  →  "reply to this thread when I'm done here"
+     control+option+command+D  →  HOLD, say "reply to this thread when I'm done here", release
+     control+option+command+N  →  or type it, if you can't speak
 TXT

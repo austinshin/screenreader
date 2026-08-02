@@ -24,7 +24,7 @@ local M = { handlers = {}, bound = {} }
 M.ACTIONS = {
   { id = "reminder", label = "New reminder",             mods = { "ctrl", "alt", "cmd" }, key = "n" },
   { id = "glance",   label = "Show my reminders",        mods = { "cmd", "alt", "shift" }, key = "r" },
-  { id = "voice",    label = "Voice listening on/off",   mods = { "ctrl", "alt", "cmd" }, key = "m" },
+  { id = "voice",    label = "Switch capture mode",       mods = { "ctrl", "alt", "cmd" }, key = "m" },
   { id = "ocr",      label = "Read this window once",    mods = { "ctrl", "alt", "cmd" }, key = "s" },
   { id = "watch",    label = "Watch mode (auto-read)",   mods = { "ctrl", "alt", "cmd" }, key = "w" },
   { id = "viewer",   label = "See what it read",         mods = { "ctrl", "alt", "cmd" }, key = "v" },
@@ -32,6 +32,12 @@ M.ACTIONS = {
   { id = "context",  label = "Where am I right now",     mods = { "ctrl", "alt", "cmd" }, key = "c" },
   { id = "test",     label = "Send a test card",         mods = { "ctrl", "alt", "cmd" }, key = "t" },
   { id = "keys",     label = "Hotkey cheatsheet",        mods = { "ctrl", "alt", "cmd" }, key = "k" },
+  -- `hold = true` is part of the chord's description, not a detail of the
+  -- handler: this whole module exists so a chord is described in exactly one
+  -- place, and "you hold this one rather than tapping it" is something the
+  -- cheatsheet and the dashboard have to be able to say.
+  { id = "dictate",  label = "Hold to speak a reminder",  mods = { "ctrl", "alt", "cmd" }, key = "d",
+    hold = true },
 }
 
 local MOD_NAME = { ctrl = "control", alt = "option", cmd = "command", shift = "shift" }
@@ -93,6 +99,7 @@ function M.list()
     out[#out + 1] = {
       id = a.id, label = a.label, mods = mods, key = key,
       chord = M.describe(mods, key),
+      hold = a.hold or false,
       isDefault = chordKey(mods, key) == chordKey(a.mods, a.key),
       default = M.describe(a.mods, a.key),
     }
@@ -107,12 +114,29 @@ end
 -- Bind everything from scratch. Cheap, and avoids the class of bug where a
 -- rebind leaves the previous chord alive alongside the new one.
 function M.apply()
+  -- Rebinding destroys every hotkey object, including the one holding a live
+  -- releasedfn. Editing a shortcut from the dashboard mid-hold would therefore
+  -- leave the recorder running with nothing left to stop it. Cheaper to cancel
+  -- than to reason about.
+  local okD, dictate = pcall(require, "cr.dictate")
+  if okD and dictate and dictate.busy and dictate.busy() then pcall(dictate.cancel) end
+
   for _, hk in ipairs(M.bound) do pcall(function() hk:delete() end) end
   M.bound = {}
   for _, b in ipairs(M.list()) do
-    local fn = M.handlers[b.id]
-    if fn then
-      local ok, hk = pcall(hs.hotkey.bind, b.mods, b.key, fn)
+    -- A handler is either a function (tap) or { pressed, released } (hold).
+    -- Both go through one bind call: hs.hotkey.new shifts its arguments right
+    -- when the third is a function or nil, so bind(mods, key, fn) still lands
+    -- fn in pressedfn exactly as before — the tap actions are untouched.
+    local h = M.handlers[b.id]
+    local pressed, released, repeated
+    if type(h) == "function" then
+      pressed = h
+    elseif type(h) == "table" then
+      pressed, released, repeated = h.pressed, h.released, h.repeated
+    end
+    if pressed or released or repeated then
+      local ok, hk = pcall(hs.hotkey.bind, b.mods, b.key, pressed, released, repeated)
       if ok and hk then M.bound[#M.bound + 1] = hk
       else log.append({ event = "hotkey.bind_failed", id = b.id, chord = b.chord }) end
     end

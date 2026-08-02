@@ -150,10 +150,15 @@ local function render()
       type = "text", text = truncate(r.text, 34), textSize = 13, textColor = pal.text,
       frame = { x = PAD + 84, y = y, w = W - PAD * 2 - 84, h = 18 },
     }
-    -- where it's bound only matters when the binding is the trigger
-    if not r.dueAt and r.referent and r.referent.label then
+    -- Where it's bound only matters when the binding is the trigger — and
+    -- "why hasn't it fired" matters more than "what is it bound to", since the
+    -- binding is visible in the reminder's own words and the countdown isn't.
+    -- Falls back to the binding when there's nothing to explain.
+    local sub = require("cr.reminders").waiting(r)
+      or (not r.dueAt and r.referent and r.referent.label)
+    if sub then
       canvas[#canvas + 1] = {
-        type = "text", text = truncate(r.referent.label, 40), textSize = 9.5,
+        type = "text", text = truncate(sub, 46), textSize = 9.5,
         textColor = pal.dim,
         frame = { x = PAD + 84, y = y + 18, w = W - PAD * 2 - 84, h = 13 },
       }

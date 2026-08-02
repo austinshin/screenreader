@@ -18,6 +18,7 @@ local matcher = require("cr.matcher")
 local reminders = require("cr.reminders")
 local notifier = require("cr.notifier")
 local observer = require("cr.observer")
+local watchfor = require("cr.watchfor")
 local tier = require("cr.tier")
 
 local M = { running = false }
@@ -48,8 +49,12 @@ end
 -- The card for a fired reminder. Built separately from fire() so an unanswered
 -- reminder can be put back on screen without re-firing it.
 local function cardFor(r, timed)
+  -- ids are stable, labels are not: "Too early" became "5 min" during this
+  -- project, and anything that had addressed that action by label would have
+  -- broken silently. See cr.notification.
   local actions = {
     {
+      id = "done",
       label = "Done",
       fn = function()
         reminders.setState(r, "done", "user")
@@ -60,10 +65,12 @@ local function cardFor(r, timed)
       -- The common answer to a reminder is "yes, but not this second", and it
       -- was previously two clicks away behind a generic Snooze. Naming the
       -- interval means you don't have to remember what Snooze is set to.
+      id = "defer_5",
       label = "5 min",
       fn = function() deferBy(r, 5, "5 min") end,
     },
     {
+      id = "snooze",
       label = "Snooze",
       fn = function() deferBy(r, cfg().snoozeMinutes, "Snooze") end,
     },
@@ -129,7 +136,14 @@ local function fire(r, snap, gate)
     end
     local s_ = hs.sound.getByName("Sosumi"); if s_ then s_:play() end
   end
-  local channels = notifier.notify(payload, { channels = chans })
+  local channels = notifier.notify(payload, {
+    channels = chans,
+    event = "reminder.fired",
+    reminder = r,
+    -- the same sentence the decision log gets. On a phone there is no screen
+    -- context to reconstruct why this arrived, so the reason travels with it.
+    trigger = { gate = gate, why = whyNow(r, snap, gate) },
+  })
   require("cr.why").note("reminder fired", r.text, {
     { "why now", whyNow(r, snap, gate) },
     { "set", os.date("%I:%M %p", r.createdAt or os.time()):gsub("^0", "")
@@ -137,6 +151,38 @@ local function fire(r, snap, gate)
     { "delivered to", table.concat(channels or r.channels or { "card" }, " + ") },
     { "waiting on", "you — the card stays up until you answer it" },
   })
+end
+
+-- Feed one OCR capture to every reminder waiting on content, and fire the ones
+-- whose condition just became true. Wired to screen_text.onCapture in cr.init.
+--
+-- Note what this does NOT do: it never fires on a first sighting. cr.watchfor
+-- requires seeing the subject *pending* before it will accept *done*, which is
+-- the same edge-triggered rule the window FSM above uses and for the same
+-- reason — when you say "merge the PR after the tests run", last run's "12
+-- passed" is usually still sitting in the terminal, and a level check would
+-- fire instantly on stale output and look broken.
+function M.onCapture(entry)
+  if not entry or not entry.text then return end
+  local waiting = {}
+  for _, r in ipairs(reminders.active()) do
+    if r.watchFor then waiting[#waiting + 1] = r end
+  end
+  if #waiting == 0 then return end
+
+  local fired = watchfor.evaluate(entry.text, waiting, log)
+  for _, hit in ipairs(fired) do
+    local r = hit.reminder
+    reminders.persist()   -- seenPending/doneAt were mutated in place
+    fire(r, observer.current, "content")
+    require("cr.why").note("reminder fired", r.text, {
+      { "why now", string.format('you asked to be reminded %s, and the screen said so: "%s"',
+          r.watchFor.phrase or "when it finished", hit.evidence or "?") },
+      { "how", "watched for it to be running first, then finish — so old output "
+          .. "already on screen couldn't set it off" },
+    })
+  end
+  if #fired > 0 and M.onStateChange then pcall(M.onStateChange) end
 end
 
 -- A sticky card only survives as long as the process drawing it. Hammerspoon
@@ -149,7 +195,12 @@ function M.restoreFired()
   for _, r in ipairs(reminders.active()) do
     if r.state == "fired" then
       n = n + 1
-      notifier.notify(cardFor(r, r.dueAt ~= nil), { channels = { "card" } })
+      notifier.notify(cardFor(r, r.dueAt ~= nil), {
+        channels = { "card" },
+        noMirror = true, -- a redraw, not a new event; must not re-ping remotes
+        event = "reminder.restored",
+        reminder = r,
+      })
     end
   end
   if n > 0 then log.append({ event = "trigger.restored", count = n }) end

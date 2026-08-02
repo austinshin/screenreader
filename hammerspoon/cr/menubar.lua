@@ -90,8 +90,10 @@ local function menu()
       fn = screenText.toggleWatch,
     },
     {
-      title = (voice.running and "Stop" or "Start") .. " voice (\"hey screenreader…\")   ⌃⌥⌘M",
-      fn = voice.toggle,
+      -- One cycling line rather than a Start/Stop toggle: there are three
+      -- states now (hold-to-talk, wake word, off) and exactly one can be live.
+      title = "Voice: " .. require("cr.capture").label() .. "   ⌃⌥⌘M",
+      fn = require("cr.capture").cycle,
     },
     {
       title = (viewer.visible and "Hide" or "Show") .. " OCR viewer   ⌃⌥⌘V",

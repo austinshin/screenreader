@@ -10,10 +10,16 @@
 -- where the user actually is, not just where the trigger fired.
 --
 -- payload: { title, body, icon, urgency, actions = { { label, fn }, ... }, meta }
+--
+-- Channels receive two arguments: `(payload, note)`. Local channels use the
+-- payload, because they can call the closures in `actions`. Remote channels
+-- use `note` — the cr.notification/v1 object, which is pure data and safe to
+-- serialize. Keeping both means a channel never has to invent a message.
 
 local config = require("cr.config")
 local log = require("cr.log")
 local ui = require("cr.notify_ui")
+local notification = require("cr.notification")
 
 local M = { channels = {} }
 
@@ -39,14 +45,13 @@ local function discordWebhook()
   end
 end
 
--- payload minus the Lua functions, safe for JSON serialization
-local function wirePayload(p)
-  local labels = {}
-  for _, a in ipairs(p.actions or {}) do labels[#labels + 1] = a.label end
-  return {
-    title = p.title, body = p.body, icon = p.icon,
-    urgency = p.urgency, actions = labels, meta = p.meta,
-  }
+-- Telegram bot: secrets.lua only. Unlike Discord there is no existing config
+-- elsewhere on this machine to fall back to, and a bot token in a repo is a
+-- bot someone else owns.
+local function telegram()
+  local t, c = M.secrets.telegramToken, M.secrets.telegramChatId
+  if t and c then return t, c end
+  return nil
 end
 
 -- built-in channels ----------------------------------------------------------
@@ -71,37 +76,57 @@ M.register("system", function(p)
   }):send()
 end)
 
-M.register("discord", function(p)
+M.register("discord", function(p, note)
   local url = discordWebhook()
   if not url then
     log.append({ event = "notify.discord.skipped", reason = "no webhook configured" })
     return
   end
-  local body = hs.json.encode({
-    content = string.format("%s **%s**\n%s", p.icon or "🔔", p.title or "", p.body or ""),
-  })
+  local body = hs.json.encode({ content = notification.toText(note, { bold = "**" }) })
   hs.http.asyncPost(url, body, { ["Content-Type"] = "application/json" }, function(code)
     log.append({ event = "notify.discord.sent", status = code, title = p.title })
   end)
 end)
 
-M.register("slack", function(p) -- Slack incoming webhook
+M.register("slack", function(p, note) -- Slack incoming webhook
   local url = M.secrets.slackWebhook
   if not url then
     log.append({ event = "notify.slack.skipped", reason = "no webhook configured" })
     return
   end
-  local body = hs.json.encode({
-    text = string.format("*%s*\n%s", p.title or "", p.body or ""),
-  })
+  local body = hs.json.encode({ text = notification.toText(note, { bold = "*" }) })
   hs.http.asyncPost(url, body, { ["Content-Type"] = "application/json" }, function(code)
     log.append({ event = "notify.slack.sent", status = code, title = p.title })
   end)
 end)
 
-M.register("webhook", function(p) -- generic JSON POST fanout
+-- Telegram is the phone channel: a bot message lands as a push notification on
+-- a device you carry, which is the whole point of routing off the Mac.
+M.register("telegram", function(p, note)
+  local token, chat = telegram()
+  if not token then
+    log.append({ event = "notify.telegram.skipped", reason = "no bot token configured" })
+    return
+  end
+  local body = hs.json.encode({
+    chat_id = chat,
+    text = notification.toText(note, { bold = "*" }),
+    parse_mode = "Markdown",
+    -- an ambient reminder is explicitly the kind that must not buzz a pocket
+    disable_notification = (note.tier and note.tier.name) == "ambient",
+  })
+  hs.http.asyncPost(
+    string.format("https://api.telegram.org/bot%s/sendMessage", token),
+    body, { ["Content-Type"] = "application/json" },
+    function(code, respBody)
+      log.append({ event = "notify.telegram.sent", status = code, title = p.title,
+                   error = code ~= 200 and (respBody or ""):sub(1, 200) or nil })
+    end)
+end)
+
+M.register("webhook", function(_, note) -- generic JSON POST fanout
   for _, url in ipairs(M.secrets.webhooks or {}) do
-    hs.http.asyncPost(url, hs.json.encode(wirePayload(p)),
+    hs.http.asyncPost(url, hs.json.encode(note),
       { ["Content-Type"] = "application/json" }, function(code)
         log.append({ event = "notify.webhook.sent", status = code, url = url })
       end)
@@ -116,7 +141,12 @@ function M.notify(payload, opts)
   for _, n in ipairs(opts.channels or config.defaultChannels) do
     names[#names + 1] = n
   end
-  if config.remoteWhenAway and hs.host.idleTime() >= config.idleThreshold then
+  -- opts.noMirror: this is a re-display of something already delivered, not a
+  -- new event. Without it, restoring an unanswered card after a reload would
+  -- re-ping Discord — the reminder would arrive on your phone a second time
+  -- because Hammerspoon restarted, which is a notification about nothing.
+  if not opts.noMirror
+     and config.remoteWhenAway and hs.host.idleTime() >= config.idleThreshold then
     for _, n in ipairs(config.remoteChannels or {}) do
       names[#names + 1] = n
     end
@@ -127,16 +157,24 @@ function M.notify(payload, opts)
     if not seen[n] then seen[n] = true; list[#list + 1] = n end
   end
 
+  -- built once, not per channel: every channel must describe the same event,
+  -- and a per-channel build would give each one its own timestamp and id
+  local note = notification.build(payload, opts)
+
   log.append({
     event = "notify.dispatch", title = payload.title, channels = list,
     body = (payload.body or ""):sub(1, 200), icon = payload.icon,
-    id = payload.meta and payload.meta.id,
-    referent = payload.meta and payload.meta.referent,
+    id = note.subject.id, referent = note.subject.bound_to,
+    notification = note.id, tier = note.tier.name,
   })
   for _, n in ipairs(list) do
     local channel = M.channels[n]
     if channel then
-      pcall(channel, payload)
+      local ok, err = pcall(channel, payload, note)
+      if not ok then
+        log.append({ event = "notify.channel_failed", channel = n,
+                     error = tostring(err):sub(1, 200) })
+      end
     else
       log.append({ event = "notify.unknown_channel", channel = n })
     end
@@ -152,6 +190,8 @@ function M.available()
     { name = "system",  configured = true, desc = "macOS Notification Center" },
     { name = "discord", configured = discordWebhook() ~= nil, desc = "Discord webhook" },
     { name = "slack",   configured = M.secrets.slackWebhook ~= nil, desc = "Slack webhook" },
+    { name = "telegram", configured = telegram() ~= nil,
+      desc = "Telegram bot — push to your phone (secrets.lua)" },
     { name = "webhook", configured = type(M.secrets.webhooks) == "table" and #M.secrets.webhooks > 0,
       desc = "generic JSON POST (secrets.lua)" },
   }

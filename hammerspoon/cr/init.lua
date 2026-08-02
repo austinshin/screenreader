@@ -29,6 +29,8 @@ local viewer   = require("cr.viewer")
 local suggestions = require("cr.suggestions")
 local menubar  = require("cr.menubar")
 local voice    = require("cr.voice")
+local dictate  = require("cr.dictate")
+local capture  = require("cr.capture")
 local keys     = require("cr.keys")
 local glance   = require("cr.glance")
 local hotkeys  = require("cr.hotkeys")
@@ -41,12 +43,17 @@ trigger.start()
 menubar.start()
 trigger.onStateChange = menubar.refresh
 trigger.restoreFired()    -- unanswered reminders survive a reload
-screenText.onCapture = viewer.update
+-- Two consumers of every OCR capture: the live viewer, and the content-condition
+-- watcher that decides whether "after the tests run" just came true.
+screenText.onCapture = function(entry)
+  pcall(viewer.update, entry)
+  pcall(trigger.onCapture, entry)
+end
 screenText.restoreWatch() -- sticky ⌃⌥⌘W toggle survives reloads/reboots
 viewer.restore()          -- sticky ⌃⌥⌘V viewer panel
 suggestions.start()
 suggestions.onChange = menubar.refresh
-voice.restore()           -- sticky ⌃⌥⌘M voice wake phrase ("hey screenreader…")
+capture.restore()         -- starts at most one voice path: push-to-talk or wake word
 keys.restore()            -- sticky ⌃⌥⌘K hotkey cheatsheet
 
 -- Hotkeys: the registry owns the chords, this only says what each one does.
@@ -59,10 +66,15 @@ keys.restore()            -- sticky ⌃⌥⌘K hotkey cheatsheet
 -- on this single-threaded config that meant dropped characters while typing
 -- anywhere. A modifier you can't have is a smaller problem than a keyboard
 -- that doesn't work — so fn is deliberately unsupported.
+-- A handler is either a function (tap) or { pressed, released } (hold).
+-- Push-to-talk is the only hold binding: the key *is* the utterance boundary,
+-- which is what removes the wake word, the settle timer, and the duplicate
+-- guards that guessed at those boundaries before.
 hotkeys.handlers = {
   reminder = reminders.promptNew,
   glance   = glance.toggle,
-  voice    = voice.toggle,
+  voice    = capture.cycle,
+  dictate  = { pressed = dictate.startRecording, released = dictate.stopRecording },
   ocr      = screenText.demo,
   watch    = screenText.toggleWatch,
   viewer   = viewer.toggle,
@@ -79,6 +91,7 @@ M.config, M.log, M.observer, M.ui, M.notifier, M.menubar = config, log, observer
 M.matcher, M.reminders, M.trigger, M.screenText = matcher, reminders, trigger, screenText
 M.viewer, M.suggestions, M.voice, M.keys = viewer, suggestions, voice, keys
 M.hotkeys, M.glance = hotkeys, glance
+M.dictate, M.capture, M.notification = dictate, capture, require("cr.notification")
 CR = M
 
 print("[cr] Contextual Reminders loaded — project: " .. tostring(projectDir))
