@@ -3,7 +3,7 @@
 A prototype for the Wispr Flow exploration: **you say what to remember, your screen decides when to surface it.**
 
 ```
-control+option+command+N  →  "reply to this thread once I'm done here"
+hold ⌃⌥⌘D  →  "reply to this thread once I'm done here"
    … keep working …
    you close the thread, switch apps  →  the reminder appears
 ```
@@ -85,10 +85,10 @@ The tier isn't a label, it's a **function that gets recomputed**. "Take out the 
 ```
      screen ──▶ observer (5s: app, title, tab, media, idle)
                     │
-                    ├──▶ trigger FSM ──▶ notifier ──▶ card / Notification Center / Discord …
+                    ├──▶ trigger FSM ──▶ notifier ──▶ card / Notification Center / Telegram …
                     │        ▲
      you ──────────────▶ reminders ─┘
-        voice / hotkey
+     hold-to-talk / hotkey
 ```
 
 - **Hammerspoon (Lua)** — sensing, state machine, cards, hotkeys, voice. `hammerspoon/cr/`
