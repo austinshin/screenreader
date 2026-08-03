@@ -45,6 +45,18 @@ DICTATE = {
     "keep_failed_audio": True,
 }
 
+# Transcript polish (optional): a small local LLM repairs what speech
+# mangled — homophones, spelled-out times — before the deterministic parsers
+# run. Auto-detected: active only while Ollama answers at `url`. The model
+# size guidance from service/extract.py applies verbatim: ~3B keeps up,
+# bigger thrashes.
+LLM = {
+    "enabled": True,   # False turns the feature off even with Ollama running
+    "url": os.environ.get("CR_OLLAMA_URL", "http://localhost:11434"),
+    "model": os.environ.get("CR_LOCAL_MODEL", "llama3.2:3b"),
+    "timeout": 8,      # seconds; past this the raw transcript ships as-is
+}
+
 # hotkeys: id → (modifier names, key). Ctrl+Alt on Windows plays the role
 # ⌃⌥⌘ did on macOS: free real estate no app claims system-wide.
 HOTKEYS = {

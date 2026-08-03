@@ -24,7 +24,7 @@ import threading
 import time
 import wave
 
-from . import config, eventlog
+from . import config, eventlog, llm, why
 
 state = "idle"
 _frames: list[bytes] = []
@@ -186,6 +186,17 @@ def _transcribe(data: bytes, snap) -> None:
                              "raw": (proc.stdout or "")[:200], "reason": reason})
             return
         wav_path.unlink(missing_ok=True)
+        # Optional local-LLM repair pass, still on this worker thread. When
+        # it changes anything, the decision log gets the before and after —
+        # a tool that rewords what you said must show its work.
+        text, meta = llm.polish(text)
+        if meta:
+            why.note("transcript polished", text, [
+                ("heard", f'"{meta["raw"]}"'),
+                ("read as", f'"{text}"'),
+                ("by", f'{meta["model"]} on this machine, {meta["ms"]}ms'),
+                ("kept because", "it repaired wording without adding anything new"),
+            ])
         _emit("transcript", (text, snap))
     except subprocess.TimeoutExpired:
         state = "idle"

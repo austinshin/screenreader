@@ -72,6 +72,7 @@ entire launchd/responsible-process saga from the macOS port doesn't exist.
 | Feature | Enable with |
 |---|---|
 | Voice (push-to-talk) | `pip install sounddevice`, a `whisper-cli` on PATH, and `models/ggml-base.en.bin` in the repo (the macOS `setup.sh` model works verbatim) |
+| Transcript polish (*a local LLM repairs mishearings: "by milk at one thirty" → "buy milk at 1:30", which timeparse can then read*) | install [Ollama](https://ollama.com) + `ollama pull llama3.2:3b` — auto-detected, guarded so it can repair but never rewrite |
 | Media awareness (*a video playing in the background is not "done"*) | `pip install winsdk` — uses the system SMTC API |
 | Discord / Slack / Telegram / webhooks | copy `crw/secrets_example.py` → `crw/secrets.py`, or set `DISCORD_WEBHOOK_URL` etc. |
 

@@ -90,6 +90,29 @@ whisper returned a silence-hallucination and the parser rejected it), the
 last failed recording is kept at `%LOCALAPPDATA%\cr-voice\last-failed.wav`,
 and `grep dictate logs\events-*.jsonl` shows what whisper actually returned.
 
+### Transcript polish (optional, needs voice)
+
+A small local LLM can repair what speech mangled before the parsers run —
+homophones ("by milk" → "buy milk") and spelled-out times ("at one thirty" →
+"at 1:30", which is the difference between a reminder that fires at 1:30 and
+one that silently doesn't):
+
+```powershell
+winget install Ollama.Ollama
+ollama pull llama3.2:3b        # ~2GB; the 3B size matters — bigger thrashes
+```
+
+Nothing else to configure: the app probes Ollama once a minute and the
+banner flips to `polish: on — llama3.2:3b repairs transcripts locally`.
+Override the model or URL with `CR_LOCAL_MODEL` / `CR_OLLAMA_URL`.
+
+The model is fenced in: it may only *repair*, never rewrite. Output that
+shares too little with what was heard, or introduces words that were never
+said, is logged (`llm.polish_rejected` in the event log) and discarded — and
+any failure or timeout ships the raw transcript unchanged. When a polish is
+accepted, `logs\decisions-*.md` records the before, the after, and which
+model did it.
+
 ## 5. Delivery channels (optional)
 
 Reminders default to the on-screen card. Per reminder they can also go to

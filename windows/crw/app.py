@@ -154,6 +154,13 @@ def main() -> None:
     ok, why_not = dictate.available()
     print("  voice: " + ("ready — hold the dictate chord and speak"
                          if ok else f"off ({why_not})"))
+    if ok:
+        from . import llm
+        model = llm.available()
+        print("  polish: " + (f"on — {model} repairs transcripts locally"
+                              if model else
+                              "off (optional: install Ollama + a ~3B model "
+                              "and it starts working)"))
     print(f"  data → {config.DATA_DIR}   logs → {config.LOGS_DIR}")
     print("  dashboard: python service/ui.py  (shows these reminders read-only)")
 
