@@ -110,8 +110,16 @@ def shutdown():
 
 def main() -> None:
     global _root
-    # Windows consoles often default to cp1252, which cannot print the arrows
-    # and emoji this app narrates with — and a banner must never be a crash.
+    # Under pythonw (the console-less interpreter autostart uses) stdout and
+    # stderr are None, and print() to None is a crash. A banner nobody can
+    # see must cost nothing, not the process.
+    import os
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    # And consoles that do exist often default to cp1252, which cannot print
+    # the arrows and emoji this app narrates with.
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:

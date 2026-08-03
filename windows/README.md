@@ -8,7 +8,9 @@ cd windows
 python run.py
 ```
 
-No install step. Optional extras enable optional features (see below).
+No install step. Optional extras enable optional features (see below);
+[INSTALL.md](INSTALL.md) is the full guide — prerequisites, voice setup,
+start-at-login, troubleshooting.
 
 ## What you get
 
