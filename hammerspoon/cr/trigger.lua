@@ -30,8 +30,6 @@ local function cfg()
   return config.trigger
 end
 
--- The card for a fired reminder. Built separately from fire() so an unanswered
--- reminder can be put back on screen without re-firing it.
 -- Defer by a fixed number of minutes, from now. Works for both kinds: a timed
 -- reminder moves its clock, a contextual one stops watching and comes back on
 -- the clock instead — otherwise "in 5 minutes" would mean "in 5 minutes, if
@@ -95,6 +93,17 @@ local function whyNow(r, snap, gate)
     return string.format("the time you set arrived (%s)%s",
       os.date("%I:%M %p", r.dueAt or os.time()):gsub("^0", ""),
       late > 2 and string.format(" — %ds later than set, checked once a second", late) or "")
+  end
+  if gate == "content" then
+    -- A content condition never fires because you left anything; the screen
+    -- said the thing finished. The seam-gate wording below would be a false
+    -- explanation here — and this sentence travels to phones, where it is the
+    -- only context there is.
+    local w = r.watchFor or {}
+    return string.format('you asked to be reminded %s, and the screen said so: "%s" — '
+      .. "it watched for the thing to be running first, then finish, so old "
+      .. "output already on screen couldn't set it off",
+      w.phrase or "when it finished", w.evidence or "?")
   end
   local where = r.referent and r.referent.label or "?"
   if gate == "max-wait" then
@@ -174,13 +183,10 @@ function M.onCapture(entry)
   for _, hit in ipairs(fired) do
     local r = hit.reminder
     reminders.persist()   -- seenPending/doneAt were mutated in place
+    -- fire() writes the decision-log entry and the wire why; whyNow's
+    -- "content" branch reads the evidence off r.watchFor, which evaluate just
+    -- stored — so one entry, and the phone gets the same sentence the log does.
     fire(r, observer.current, "content")
-    require("cr.why").note("reminder fired", r.text, {
-      { "why now", string.format('you asked to be reminded %s, and the screen said so: "%s"',
-          r.watchFor.phrase or "when it finished", hit.evidence or "?") },
-      { "how", "watched for it to be running first, then finish — so old output "
-          .. "already on screen couldn't set it off" },
-    })
   end
   if #fired > 0 and M.onStateChange then pcall(M.onStateChange) end
 end
@@ -215,10 +221,14 @@ local function retier(r, snap)
   local to, why = from, nil
 
   if r.dueAt then
+    -- Proximity raises volume, inside two hard limits. Ambient promised to
+    -- never interrupt, and a promise that holds only while the clock is far
+    -- away is not a promise — so time cannot promote it. And critical needs
+    -- stated consequence (cr.tier's signals), not mere nearness: when every
+    -- "in 5 minutes" reminder passed through critical on its way to firing —
+    -- siren, forced system banner, seam-gate bypass — critical meant nothing.
     local left = r.dueAt - os.time()
-    if left <= 600 and from > tier.CRITICAL then
-      to, why = tier.CRITICAL, "under ten minutes away"
-    elseif left <= 3600 and from > tier.UPCOMING then
+    if from ~= tier.AMBIENT and left <= 3600 and from > tier.UPCOMING then
       to, why = tier.UPCOMING, "within the hour"
     end
   elseif r.referent and from == tier.AMBIENT and matcher.matches(r.referent, snap) then
@@ -307,12 +317,6 @@ local function step(r, snap)
         gate = "max-wait"
       end
       if gate then fire(r, snap, gate) end
-    end
-
-  elseif r.state == "snoozed" then
-    if os.time() >= (r.snoozeUntil or 0) then
-      r.readyAt = os.time()
-      reminders.setState(r, "ready", "snooze-elapsed")
     end
   end
 end

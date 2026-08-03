@@ -125,9 +125,10 @@ function M.cancel(reason)
   if M.state == "idle" then return end
   stopTimers()
   killTasks()
-  if M._wavPath and not (cfg().keepFailedAudio == false) then
-    os.remove(M._wavPath)
-  end
+  -- Always delete: a cancel is a deliberate abort, not a failed parse.
+  -- keepFailedAudio applies in _onTranscript, where audio is the evidence for
+  -- why a parse went wrong — here there is nothing to diagnose.
+  if M._wavPath then os.remove(M._wavPath) end
   M.state = "idle"
   M._wavPath = nil
   listening.hide()

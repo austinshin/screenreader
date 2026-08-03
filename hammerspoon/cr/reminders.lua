@@ -29,8 +29,14 @@ function M.persist()
   hs.fs.mkdir(dataDir())
   local ok, blob = pcall(hs.json.encode, { items = M.items }, true)
   if not ok then return end
-  local f = io.open(dataPath(), "w")
-  if f then f:write(blob); f:close() end
+  -- Write-then-rename, never truncate-in-place: the dashboard polls this file
+  -- every 4s, and a read that lands mid-truncate sees an empty reminder list.
+  local tmp = dataPath() .. ".tmp"
+  local f = io.open(tmp, "w")
+  if not f then return end
+  f:write(blob)
+  f:close()
+  os.rename(tmp, dataPath())
 end
 
 function M.load()
@@ -199,7 +205,7 @@ end
 function M.waiting(r)
   local cfg = config.trigger or {}
   local need = cfg.absentSamples or 6
-  if r.dueAt and (r.state == "scheduled" or r.state == "snoozed") then
+  if r.dueAt and r.state == "scheduled" then
     return nil  -- the clock already answers this; whenFor shows it
   end
   local where = r.referent and r.referent.label or "it"

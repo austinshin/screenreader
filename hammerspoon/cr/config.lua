@@ -36,8 +36,9 @@ local M = {
   suggestions = {
     enabled        = false,
     pollInterval   = 10,   -- seconds between checks of data/candidates.jsonl
-    fireThreshold  = 0.55, -- >= interrupt with a card
-    inboxThreshold = 0.30, -- >= silent menu-bar inbox (enforced service-side)
+    fireThreshold  = 0.55, -- >= interrupt with a card; below lands in the inbox
+    -- (the floor below which a candidate is dropped entirely is service-side:
+    -- THRESH_INBOX in service/extract.py — Lua only ever sees survivors)
     digestMin      = 3,    -- inbox items needed before a digest is worth asking
     digestCooldown = 3600, -- seconds between digests (at most one per hour)
   },

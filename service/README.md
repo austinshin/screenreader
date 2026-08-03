@@ -28,18 +28,18 @@ python3 -m venv .venv && .venv/bin/pip install anthropic   # once
 .venv/bin/python service/extract.py --stats     # weights + precision so far
 ```
 
-Backend is chosen automatically: `claude` when `ANTHROPIC_API_KEY` is set (or an
-`ant auth login` profile exists), else `rules`. Force with
-`--backend rules|claude`.
+Backend is chosen automatically: `local` when Ollama is running (same job,
+nothing leaves the machine), else `claude` when `ANTHROPIC_API_KEY` is set (or
+a Keychain item exists), else `rules`. Force with `--backend rules|claude|local`.
 
-## The two backends
+## The three backends
 
-| | `rules` | `claude` |
-|---|---|---|
-| Needs | nothing | API key |
-| Extraction | regex patterns + heuristics | `claude-opus-5`, structured output, precision-first system prompt |
-| Determinism | fully replayable | not replayable |
-| Measured precision | **~2%** (see below) | not yet measured |
+| | `rules` | `claude` | `local` |
+|---|---|---|---|
+| Needs | nothing | API key | Ollama running (a ~3B instruct model) |
+| Extraction | regex patterns + heuristics | `claude-opus-5`, structured output, precision-first system prompt | same prompt + schema-constrained decoding, on this machine |
+| Determinism | fully replayable | not replayable | not replayable |
+| Measured precision | **~2%** (see below) | not yet measured | not yet measured |
 
 The gate runs before **both**. It is the cost control: full-screen OCR yields
 thousands of lines per capture and almost none are commitments. Measured on 100
@@ -54,6 +54,10 @@ Run against 100 real captures with the rules backend:
 would interrupt (score >= 0.55):  0
 inbox only (0.30 – 0.55):        60
 ```
+
+(Recorded when the inbox floor was 0.30; it has since moved to 0.50 —
+`THRESH_INBOX` in `extract.py` — because below half-confidence the extractor
+is guessing at whether the user is even the one on the hook.)
 
 Of those 60, roughly one was a real commitment. The rest were Facebook
 messages, my own prose in a terminal, Markdown headings, and a status-page

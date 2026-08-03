@@ -72,7 +72,7 @@ local function whenFor(r)
     return clock, rel, (left <= 900)
   end
   local map = { pending = "waiting", armed = "watching", cooldown = "watching",
-                ready = "any moment", snoozed = "snoozed", fired = "reminded" }
+                ready = "any moment", fired = "reminded" }
   return map[r.state] or r.state, nil, false
 end
 

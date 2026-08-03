@@ -15,7 +15,8 @@
 --
 -- Audio never leaves the machine (-d forces on-device recognition), matching
 -- the local-only story of the OCR pipeline. The mic is held open while
--- enabled, so this is a sticky opt-out toggle (⌃⌥⌘M) like watch mode.
+-- enabled; whether this path is live at all is cr.capture's tri-state
+-- (cycle with ⌃⌥⌘M), which persists it and starts/stops this module.
 
 local config = require("cr.config")
 local log = require("cr.log")
@@ -341,7 +342,10 @@ function M.start()
     return
   end
   M.running = true
-  hs.settings.set("cr.voice", true) -- sticky: survives hs.reload() and reboots
+  -- Stickiness is cr.capture's job, not this module's. Writing the legacy
+  -- "cr.voice" boolean here would resurrect the key capture.migrate() clears
+  -- on every load — which is how choosing "off" once turned back into
+  -- push-to-talk after a reload.
   hs.fs.mkdir(logsDir())
   -- Roll, don't wipe. This log was truncated on every start, so when a live
   -- demo produced two reminders from one sentence the input that caused it was
@@ -397,7 +401,6 @@ end
 function M.stop()
   if not M.running then return end
   M.running = false
-  hs.settings.set("cr.voice", false)
   if settleTimer then settleTimer:stop() end
   if pollTimer then pollTimer:stop(); pollTimer = nil end
   if healthTimer then healthTimer:stop(); healthTimer = nil end
@@ -422,12 +425,9 @@ function M._resetForTest()
   lastFired = { text = "", at = 0 }
 end
 
-function M.toggle()
-  if M.running then M.stop() else M.start() end
-end
-
-function M.restore()
-  if hs.settings.get("cr.voice") ~= false then M.start() end -- default on
-end
+-- No toggle() or restore() here on purpose: which voice path is live is
+-- cr.capture's single tri-state, and a direct start/stop entry point is a
+-- side door around it — the "both microphones running" state it exists to
+-- make unrepresentable.
 
 return M

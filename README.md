@@ -11,7 +11,8 @@ hold ⌃⌥⌘D  →  "reply to this thread once I'm done here"
 No clock. The trigger is *"you finished the thing you were looking at."*
 
 **Setup:** [INSTALL.md](INSTALL.md) — or just `./setup.sh`. 
-**Daily use, config, debugging:** [RUNNING.md](RUNNING.md). **Code walkthrough:** [ARCHITECTURE.md](ARCHITECTURE.md).
+**Daily use, config, debugging:** [RUNNING.md](RUNNING.md). **Code walkthrough:** [ARCHITECTURE.md](ARCHITECTURE.md). 
+**On Windows:** `python windows/run.py` — a single-process port of the same product; see [windows/README.md](windows/README.md).
 
 ---
 
@@ -76,7 +77,7 @@ The same edge-triggered rule extends to conditions about the world rather than a
 | **In context** | when you're done with the thing | a screen binding |
 | **Ambient** | **never** — dashboard and menu bar only | "keep an eye on", "at some point" |
 
-The tier isn't a label, it's a **function that gets recomputed**. "Take out the trash" is ambient at 2pm, upcoming at 7pm, and critical the night before collection — nothing about it changed except distance from consequence. Every move is logged with its reason.
+The tier isn't a label, it's a **function that gets recomputed**. "Email the landlord by 5" can wait all morning and becomes upcoming once 5pm is inside the hour — nothing about it changed except distance from consequence. Two moves are off-limits: ambient is never promoted (*never interrupts* has to mean never), and nothing reaches critical on proximity alone — only words with stated consequence put it there. Every move is logged with its reason.
 
 ---
 
@@ -161,6 +162,7 @@ The rule I settled on: **anything that can silently lose a reminder gets tests; 
 ```sh
 ./smoke-test.sh                              # eight layers in ~30s, nonzero exit on failure
 python3 service/test_gate.py                 # the gate eval
+hs -c 'require("cr.test_timeparse").run()'   # the time parser ("at 130", "today", …)
 hs -c 'require("cr.test_dictate").run()'     # push-to-talk parser, on real whisper output
 hs -c 'require("cr.test_capture").run()'     # the older wake-word path, on recorded transcripts
 ./start                                      # dashboard → http://localhost:8765
