@@ -19,9 +19,46 @@ import struct
 
 from . import config, eventlog
 
-_user32 = ctypes.windll.user32
-_shell32 = ctypes.windll.shell32
-_kernel32 = ctypes.windll.kernel32
+# Private WinDLL instances (not ctypes.windll.*): the signatures declared
+# below must not leak onto the process-wide cached function objects that
+# observer/winloop share.
+_user32 = ctypes.WinDLL("user32")
+_shell32 = ctypes.WinDLL("shell32")
+_kernel32 = ctypes.WinDLL("kernel32")
+
+# Every signature declared, nothing left to ctypes' 32-bit int defaults.
+# The lesson behind this block: menu messages (WM_INITMENUPOPUP,
+# WM_ENTERIDLE, …) carry handle-sized params, and an untyped
+# DefWindowProcW call raised OverflowError on them *inside the WNDPROC* —
+# ctypes swallows the exception and returns 0, Windows' default menu logic
+# never runs, and the context menu renders as a blank white box.
+_LRESULT = ctypes.c_ssize_t
+_WPARAM = ctypes.c_size_t
+_LPARAM = ctypes.c_ssize_t
+_user32.DefWindowProcW.restype = _LRESULT
+_user32.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, _WPARAM, _LPARAM]
+_user32.CreatePopupMenu.restype = wt.HMENU
+_user32.AppendMenuW.restype = wt.BOOL
+_user32.AppendMenuW.argtypes = [wt.HMENU, wt.UINT, ctypes.c_size_t, wt.LPCWSTR]
+_user32.TrackPopupMenu.restype = ctypes.c_int  # item id under TPM_RETURNCMD
+_user32.TrackPopupMenu.argtypes = [wt.HMENU, wt.UINT, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, wt.HWND,
+                                   ctypes.c_void_p]
+_user32.DestroyMenu.argtypes = [wt.HMENU]
+_user32.SetForegroundWindow.argtypes = [wt.HWND]
+_user32.PostMessageW.argtypes = [wt.HWND, wt.UINT, _WPARAM, _LPARAM]
+_user32.CreateWindowExW.restype = wt.HWND
+_user32.CreateWindowExW.argtypes = [wt.DWORD, wt.LPCWSTR, wt.LPCWSTR,
+                                    wt.DWORD, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, wt.HWND,
+                                    wt.HMENU, wt.HINSTANCE, ctypes.c_void_p]
+_user32.LoadImageW.restype = wt.HANDLE
+_user32.LoadImageW.argtypes = [wt.HINSTANCE, wt.LPCWSTR, wt.UINT,
+                               ctypes.c_int, ctypes.c_int, wt.UINT]
+_kernel32.GetModuleHandleW.restype = wt.HMODULE
+_kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
+_shell32.Shell_NotifyIconW.restype = wt.BOOL
+_shell32.Shell_NotifyIconW.argtypes = [wt.DWORD, ctypes.c_void_p]
 
 WM_APP_TRAY = 0x8001          # uCallbackMessage for the icon
 _WM_DESTROY = 0x0002
@@ -105,9 +142,11 @@ def _show_menu() -> None:
     menu = _user32.CreatePopupMenu()
     for cmd, label, _ in _MENU:
         if label is None:
-            _user32.AppendMenuW(menu, 0x800, 0, None)          # MF_SEPARATOR
+            ok = _user32.AppendMenuW(menu, 0x800, 0, None)     # MF_SEPARATOR
         else:
-            _user32.AppendMenuW(menu, 0x0, cmd, label)         # MF_STRING
+            ok = _user32.AppendMenuW(menu, 0x0, cmd, label)    # MF_STRING
+        if not ok:
+            eventlog.append({"event": "tray.menu_append_failed", "item": label})
     pt = wt.POINT()
     _user32.GetCursorPos(ctypes.byref(pt))
     # the classic tray-menu dance: without SetForegroundWindow the menu
@@ -123,18 +162,26 @@ def _show_menu() -> None:
 
 
 def _wndproc(hwnd, msg, wparam, lparam):
-    if msg == WM_APP_TRAY:
-        if lparam == _WM_LBUTTONUP:
-            _queue.put(("glance", "tray"))
-        elif lparam == _WM_RBUTTONUP:
-            _show_menu()
-        return 0
-    if msg == _taskbar_created:
-        _add_icon()  # explorer restarted; the icon died with it
-        return 0
-    if msg == _WM_DESTROY:
-        remove()
-        return 0
+    # Exception-proof by construction: a WNDPROC that raises has its
+    # exception eaten by ctypes and returns 0 for a message Windows needed
+    # answered — which is invisible everywhere except the broken behavior it
+    # causes. Anything unexpected falls through to DefWindowProc instead.
+    try:
+        if msg == WM_APP_TRAY:
+            if lparam == _WM_LBUTTONUP:
+                _queue.put(("glance", "tray"))
+            elif lparam == _WM_RBUTTONUP:
+                _show_menu()
+            return 0
+        if msg == _taskbar_created:
+            _add_icon()  # explorer restarted; the icon died with it
+            return 0
+        if msg == _WM_DESTROY:
+            remove()
+            return 0
+    except Exception as e:
+        eventlog.append({"event": "tray.wndproc_error", "msg": msg,
+                         "error": str(e)[:200]})
     return _user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
 
