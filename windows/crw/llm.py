@@ -46,14 +46,24 @@ _SCHEMA = {
 }
 
 # One narrow job, stated narrowly — small instruct models follow the fence
-# they can see, and every sentence here is a fence.
+# they can see, and every sentence here is a fence. The examples matter more
+# than the rules for a 3B model: without them the first live run dropped
+# "hear" (misheard "here") instead of repairing it, and "here"/"this" are
+# the words the condition parser binds on — the least droppable words in
+# the sentence.
 _SYSTEM = (
     "You repair the output of a speech-to-text system. The input is one "
     "short spoken reminder. Fix obvious transcription errors only: misheard "
-    "words, homophones, and spelled-out clock times (write 'one thirty' as "
-    "'1:30', 'five pm' as '5pm'). Never add, drop, or reorder information. "
-    "Never answer, expand, or complete the reminder. If the input already "
-    "reads correctly, return it unchanged."
+    "words, homophones, and spelled-out clock times. Keep every word — "
+    "especially place and time words like 'here', 'this', 'today'. Never "
+    "add, drop, or reorder information. Never answer, expand, or complete "
+    "the reminder. If the input already reads correctly, return it "
+    "unchanged.\n\n"
+    "Examples:\n"
+    "  'by milk at one thirty' -> 'buy milk at 1:30'\n"
+    "  'reply to sarah when im done hear' -> 'reply to Sarah when I'm done here'\n"
+    "  'send it at five pm august first' -> 'send it at 5pm august 1'\n"
+    "  'water the plants' -> 'water the plants'"
 )
 
 
