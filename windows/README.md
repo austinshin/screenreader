@@ -20,6 +20,11 @@ No install step. Optional extras enable optional features (see below).
 | `Ctrl+Alt+T` | send a test card |
 | `Ctrl+Alt+Q` | quit |
 
+A ◉ tray icon (notification area) mirrors the macOS menu bar: left-click
+toggles the glance panel, right-click gets you new-reminder / test-card /
+logs / quit. Windows hides new tray icons under the ^ chevron by default —
+drag it onto the taskbar to pin it.
+
 Same semantics as the macOS original: *"reply to this thread once I'm done
 here"* strips the condition, binds to the foreground window, and fires only
 after you leave it and stay away (~30s of checks), at a seam — an app switch

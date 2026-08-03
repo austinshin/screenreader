@@ -76,6 +76,9 @@ def _drain_queue():
             cards.glance_toggle()
         elif action == "test":
             notifier.test()
+        elif action == "logs":
+            import os
+            os.startfile(config.logs_dir())
         elif action == "quit":
             shutdown()
             return

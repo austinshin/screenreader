@@ -25,7 +25,7 @@ import ctypes.wintypes as wt
 import threading
 import time
 
-from . import config, eventlog
+from . import config, eventlog, tray
 
 _user32 = ctypes.windll.user32
 
@@ -94,6 +94,10 @@ def _loop(hold_ids) -> None:
     _user32.SetWinEventHook(_EVENT_SYSTEM_FOREGROUND, _EVENT_SYSTEM_FOREGROUND,
                             None, _hook_ref, 0, 0, _WINEVENT_OUTOFCONTEXT)
 
+    # The tray icon lives on this thread: it is a hidden window plus callback
+    # messages, and this loop's DispatchMessage is what delivers them.
+    tray.install(queue)
+
     msg = wt.MSG()
     while _user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
         if msg.message == _WM_HOTKEY and msg.wParam in ids:
@@ -109,6 +113,7 @@ def _loop(hold_ids) -> None:
         _user32.TranslateMessage(ctypes.byref(msg))
         _user32.DispatchMessageW(ctypes.byref(msg))
 
+    tray.remove()
     for i in ids:
         _user32.UnregisterHotKey(None, i)
 
